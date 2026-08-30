@@ -182,6 +182,20 @@ python3 -m pytest Tests                                       # 回帰テスト
 
 ## 現在の状態
 
+**Phase 1〜7 完了。第1完成目標を達成した。**
+
+灰色の ZN6 が Physics Test Track（1,181m）を 53.93 秒で1周し、
+テレメトリ解析で異常が出ない（最大横ずれ 1.55m / 最大すべり角 5.4deg / スピンなし）。
+
+```bash
+python3 Tools/run_acceleration.py --plot Data/acceleration.png   # 0-100km/h
+python3 Tools/run_lap.py --csv Data/lap.csv --plot Data/lap.png  # 1周
+```
+
+**ただし結果の confidence は 0.20 で、実測値との比較には使えない。**
+トルクカーブが `assumed` である限り、Reality Validator の検証対象にできない。
+第1完成目標は「物理的に妥当な動きをすること」であって「実車と一致すること」ではない。
+
 `vehicle.json`: official 38項目 / secondary 4項目 / **unknown 47項目**。
 
 未取得のうち影響が大きいもの:

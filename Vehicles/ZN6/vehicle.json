@@ -284,6 +284,12 @@
       "confidence": 0.20,
       "note": "mu(Fz) = mu0 * (1 - k * (Fz - Fz_nominal))。荷重が増えるほどμが下がる特性。これが無いと荷重移動の効果が正しく出ない(SPEC_ZN6.md §6.3)。"
     },
+    "wheel_rotational_inertia": {
+      "value": 1.20, "min": 0.90, "max": 1.60, "unit": "kg*m^2",
+      "source": "assumed", "method": "typical_17inch_alloy_plus_tire",
+      "confidence": 0.25,
+      "note": "車輪1本(ホイール+タイヤ+ブレーキローター)の回転慣性。17インチ純正アルミ + 215/45R17 の一般値。4輪合計で等価質量 4*1.20/0.3033^2 = 52kg 相当になり、車重の 4% を占める。スリップ率の動特性(車輪の空転・ロック)を計算するのに必須。"
+    },
     "rolling_resistance_coefficient": {
       "value": 0.012, "min": 0.009, "max": 0.016, "unit": "-",
       "source": "assumed", "method": "typical_summer_street_tire_on_asphalt",
