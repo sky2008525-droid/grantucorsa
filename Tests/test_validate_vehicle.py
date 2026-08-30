@@ -84,12 +84,26 @@ def test_未定義のsourceを弾く():
     assert any("未定義" in m for m in errors(node))
 
 
-def test_6分類すべてを受け付ける():
-    """official_marketing と secondary は CL1版の4分類には無かった（SPEC_ZN6.md §5.2）。"""
+def test_8分類すべてを受け付ける():
+    """CL1版は4分類だった。
+
+    official_marketing / secondary  ZN6 の初期データが必要とした
+    calculated / measured_shape     2026-08-30 のデータドロップが必要とした
+
+    calculated は「既知の値からの厳密な計算」で、モデル上の仮定を含む
+    estimated と区別する。measured_shape は「実測から形状だけを取り、絶対値は
+    公式アンカーに正規化したもの」で、その量自体を測った measured と区別する。
+    """
     assert set(vv.SOURCE_CONFIDENCE_BANDS) == {
-        "official", "official_marketing", "measured",
-        "secondary", "estimated", "assumed",
+        "official", "calculated", "official_marketing", "measured",
+        "measured_shape", "secondary", "estimated", "assumed",
     }
+
+
+def test_calculatedとmeasured_shapeはmethod必須():
+    """どう計算したか / どの実測から形状を取ったかを残させる。"""
+    assert "calculated" in vv.METHOD_REQUIRED_SOURCES
+    assert "measured_shape" in vv.METHOD_REQUIRED_SOURCES
 
 
 @pytest.mark.parametrize("source", ["estimated", "assumed"])

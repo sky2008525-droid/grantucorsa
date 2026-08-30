@@ -30,15 +30,31 @@ import sys
 # source と confidence の帯。帯を外れたら「分類と信頼度が食い違っている」ことになる。
 SOURCE_CONFIDENCE_BANDS = {
     "official":           (0.90, 1.00),
+    "calculated":         (0.60, 0.95),
     "official_marketing": (0.70, 0.89),
     "measured":           (0.70, 0.89),
+    "measured_shape":     (0.40, 0.60),
     "secondary":          (0.70, 0.89),
     "estimated":          (0.40, 0.69),
     "assumed":            (0.00, 0.39),
 }
 
+# `calculated` と `measured_shape` は 2026-08-30 のデータドロップで追加した。
+#
+#   calculated     既知の値からの**厳密な計算**。モデル上の仮定を含まない。
+#                  例: タイヤ無負荷半径 = リム径 + 2*サイドウォール（サイズから一意）
+#                      7,000rpm のトルク = 公式最高出力 / 角速度
+#                  estimated と分ける理由: estimated は「こういうモデルだと仮定すると」が
+#                  入るが、calculated は入力さえ正しければ一意に決まる。
+#                  confidence は入力の confidence を超えてはいけない。
+#
+#   measured_shape 実測から**形状だけ**を取り、絶対値は公式アンカーに正規化したもの。
+#                  例: FA20 のトルクカーブの 4,000rpm の谷（ダイノ実測の記述由来だが、
+#                      絶対値は公式の 205N*m / 147kW に合わせてある）
+#                  measured と分ける理由: その量そのものを測った値ではないため。
+
 # method が必須の source（推定方法を記録する / 憲法ルール4）
-METHOD_REQUIRED_SOURCES = {"estimated", "assumed"}
+METHOD_REQUIRED_SOURCES = {"estimated", "assumed", "calculated", "measured_shape"}
 
 # SI 単位と、無次元を表す "-"。
 SI_UNITS = {

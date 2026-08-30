@@ -234,3 +234,55 @@ def test_ブレーキ配分が前寄りである(data):
 def test_ブレーキペダルの範囲外を拒否する(data):
     with pytest.raises(ValueError):
         Brakes(data).axle_torques_nm(1.2)
+
+
+# --- データドロップ由来の逆算チェック -------------------------------------
+
+
+def test_ギア比と有効半径の逆算が実車と一致する(data):
+    """**縦断モデルはタイヤ有効半径 1個で全速度域がスケールする。**
+
+    6速(0.767) x ファイナル(4.100) と R_e を組んで 100km/h のときのエンジン回転数が
+    実車の 6速100km/h ≒ 2,700rpm と一致するか。データドロップの
+    `tires.effective_radius` の validation_note が要求している回帰テスト。
+
+    ここがずれていると、加速も最高速も全速度域で一様にずれる。**しかも
+    「なんとなく遅い/速い」としてしか現れないので、タイヤμを触って辻褄を
+    合わせたくなる**（憲法ルール9 が禁じる事故の入口）。
+    """
+    from units import rads_to_rpm
+
+    drivetrain = Drivetrain(data)
+    radius = data.value("tires.effective_radius", "m")
+
+    speed_mps = 100.0 / 3.6
+    wheel_omega = speed_mps / radius
+    rpm = rads_to_rpm(drivetrain.engine_omega_rads(wheel_omega, "6"))
+
+    assert rpm == pytest.approx(2700.0, rel=0.03), (
+        "6速100km/h で {:.0f} rpm。実車は約 2,700rpm。"
+        "有効半径かギア比が疑わしい".format(rpm)
+    )
+
+
+def test_トルクカーブが公式アンカーと出力の整合を保つ(data):
+    """データドロップのカーブは 全25点で トルク x omega = 出力 が一致する。
+
+    補間後の最高出力は 147.05kW @ 7,025rpm（定格 147kW @ 7,000rpm）。
+    """
+    engine = Engine(data)
+    peak_w, peak_rpm = engine.peak_power_w()
+    assert peak_w == pytest.approx(147_000.0, rel=0.01)
+    assert peak_rpm == pytest.approx(7000.0, rel=0.02)
+
+
+def test_タイヤμがスキッドパッド実測に紐づいている(data):
+    """μ は assumed（作り話）ではなく、実測 0.82g から較正した値。
+
+    **スキッドパッドは較正の入力になったので、以後これを検証指標として
+    使ってはいけない（循環論法）。**
+    """
+    param = data.param("tires.friction_coefficient")
+    assert param.source == "estimated"
+    assert "skidpad" in (param.method or "")
+    assert 0.95 <= param.value <= 1.06

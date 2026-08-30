@@ -43,10 +43,15 @@
     "front_axle_mass": "unknown",
     "rear_axle_mass":  "unknown",
     "weight_distribution_front_pct": {
-      "value": 0.53, "min": 0.51, "max": 0.55, "unit": "-",
-      "source": "assumed", "method": "secondary_consensus_unverified",
-      "confidence": 0.35,
-      "note": "二次情報で 53:47 前後の記述が散見されるが一次資料で未検証(#5)。物理モデルが荷重移動計算に必要とするため assumed として置く。範囲は二次情報のばらつき。Source B 以上が取れたら差し替えること。"
+      "value": 0.542, "min": 0.535, "max": 0.550, "unit": "-",
+      "source": "estimated", "method": "derived_from_official_2occupant_distribution",
+      "confidence": 0.45,
+      "note": "【空車時の値】トヨタ公式の 53:47 は**前席2名乗車時**であり、このモデルが使う車両重量1,230kg(空車)には直接使えない。乗員110kgを前後40:60で配分して逆算すると空車は 54.2:45.8。乗員はCG付近〜やや後方に座るため、空車の方が前寄りになる。",
+      "official_2occupant": {
+        "value": 0.53, "unit": "-", "source": "official", "confidence": 0.90,
+        "method": "toyota_official_performance_page",
+        "note": "こちらが公式値。乗員込みの状態を計算するときはこれを使う。"
+      }
     },
     "_note": "重量配分は公式諸元表に記載がない。53:47 前後の値が二次情報に散見されるが未検証。Source B 以上の出典が取れるまで unknown。"
   },
@@ -69,22 +74,22 @@
       "note": "Lf = wheelbase * (1 - front_pct) = 2.570 * 0.47。重量配分が assumed のため confidence はそれ以下に抑える。Lr = 2.570 - Lf = 1.362 m。"
     },
     "Ixx": {
-      "value": 480, "min": 380, "max": 600, "unit": "kg*m^2",
-      "source": "assumed", "method": "scaled_from_mass_and_track",
+      "value": 390, "min": 320, "max": 470, "unit": "kg*m^2",
+      "source": "estimated", "method": "radius_of_gyration_0_56m_for_small_two_door_coupe",
       "confidence": 0.25,
-      "note": "ロール慣性。Ixx ~= m * (k*track/2)^2、k=0.55 として概算。バネ上/バネ下の分離ができていないため精度は低い。準静的荷重移動モデルでは未使用。ロール動特性を入れる段階で要検証。"
+      "note": "ロール慣性。回転半径 k_x ~= 0.56m（小型2ドアクーペの一般域）と車両質量から。準静的荷重移動モデルでは未使用。ロール動特性を入れる段階で要検証(#19)。"
     },
     "Iyy": {
-      "value": 1900, "min": 1500, "max": 2300, "unit": "kg*m^2",
-      "source": "assumed", "method": "scaled_from_mass_and_wheelbase",
+      "value": 2050, "min": 1700, "max": 2400, "unit": "kg*m^2",
+      "source": "estimated", "method": "radius_of_gyration_from_mass_and_wheelbase",
       "confidence": 0.25,
-      "note": "ピッチ慣性。準静的荷重移動モデルでは未使用。"
+      "note": "ピッチ慣性。準静的荷重移動モデルでは未使用(#19)。"
     },
     "Izz": {
-      "value": 2023, "min": 1700, "max": 2350, "unit": "kg*m^2",
-      "source": "estimated", "method": "izz_approx_mass_times_lf_times_lr",
-      "confidence": 0.40,
-      "note": "ヨー慣性。乗用車で広く使われる近似 Izz ~= m * Lf * Lr = 1230 * 1.208 * 1.362。スポーツクーペの実測は概ね 1800-2200 kg*m^2 の範囲で、その中に収まる。重量配分が assumed のため confidence はそれ以下。"
+      "value": 2020, "min": 1800, "max": 2300, "unit": "kg*m^2",
+      "source": "estimated", "method": "dynamic_index_izz_equals_m_a_b_times_DI",
+      "confidence": 0.30,
+      "note": "ヨー慣性。Dynamic Index 法: Izz = m*a*b*DI (a=1.208m, b=1.362m, m=1230kg, DI=1.0 / 範囲 0.9-1.15)。"
     },
     "sprung_mass": "unknown",
     "unsprung_mass_front": "unknown",
@@ -107,23 +112,55 @@
                          "note": "後期6MTは212N*m/6,400-6,800rpm。" },
     "torque_curve": {
       "value": [
-        [1000, 150.0], [1500, 170.0], [2000, 185.0], [2500, 192.0],
-        [3000, 196.0], [3500, 193.0], [4000, 180.0], [4500, 186.0],
-        [5000, 194.0], [5500, 199.0], [6000, 203.0], [6400, 205.0],
-        [6600, 205.0], [7000, 200.5], [7400, 188.0]
+        [700, 72], [1000, 103], [1500, 135], [2000, 164],
+        [2500, 189], [2800, 196], [3000, 197], [3200, 193],
+        [3500, 180], [3800, 172], [4000, 170], [4200, 174],
+        [4500, 195], [4800, 200], [5000, 201], [5500, 201],
+        [6000, 202], [6400, 205], [6500, 205], [6600, 205],
+        [6800, 203], [7000, 200.5], [7100, 197], [7200, 191],
+        [7400, 180]
       ],
       "unit": "N*m",
       "rpm_unit": "1/min",
-      "source": "assumed",
-      "method": "shape_constructed_from_two_official_points_plus_known_dip",
-      "confidence": 0.30,
-      "note": "【重要】これは実測ではない。#3 が閉じるまでの仮置き。構成: (a) 最大トルク 205 N*m / 6,400-6,600rpm と最高出力 147kW / 7,000rpm の公式2点で固定。7,000rpm のトルクは P/omega = 147000/733.0 = 200.5 N*m として算出。(b) FA20 に広く知られる 4,000rpm 付近の谷を形状として与えた。(c) 残りは NA 直4/水平対向の一般的な曲線形状。ZN6_BASELINE.md の警告どおり2点補間ではないが、谷の深さと位置に出典が無い。この値から導かれた加速結果は Reality Validator の検証対象にしてはいけない。【補間後の検算】PCHIP補間したカーブの最高出力は 147.5kW @ 7,130rpm となり、公式の定格点(147kW @ 7,000rpm)に対し出力で +0.3%、回転数で +1.9% ずれる。これは構成の失敗ではなく、公式値どうしの非整合による。最大トルク 205N*m を 6,400-6,600rpm で保ったまま出力の最大を厳密に 7,000rpm に置くには、6,800rpm 付近のトルクが 206N*m 超（=最大トルクを超える）である必要があり矛盾する。諸元表の「最高出力 @ 7,000rpm」は定格点であって曲線の厳密な極大ではないと解釈した。検証は極大の位置ではなく、公式2点の再現精度で行うこと。"
+      "source": "measured_shape",
+      "method": "official_anchors_plus_dyno_derived_shape",
+      "confidence": 0.40,
+      "csv": "Vehicles/ZN6/fa20_torque_curve.csv",
+      "note": "【混成データ。点ごとに出所が違う】絶対値は公式2点(205N*m/6,400-6,600rpm、147kW/7,000rpm)にアンカーし、その間の形状のみを実測ダイノの記述から構成した。カーブ全体を実測値として扱わないこと。検算: 全25点で トルク×ω = 出力 が一致。補間後の最高出力は 147.05kW @ 7,025rpm で定格から出力+0.03%/回転数+0.36%。4,000rpm の谷は 3,000rpm 比 -13.7%、2,800-3,200rpm に谷の手前の盛り上がりがある。",
+      "WARNING_low_rpm": "1,000-2,000rpm の4点は assumed (confidence 0.15-0.25) の外挿であり実測ではない。全開加速は 3,500rpm 発進なのでほぼ使わないが、低速走行では使う。この領域を通る結果の信頼度は 0.40 ではなく 0.20 として扱うこと。ノード単位の confidence では点ごとの差を表現できないため、暫定的に 2,500rpm 以上の最小値 0.40 を採っている。",
+      "point_provenance": [
+        ["700", "assumed", 0.15],
+        ["1000", "assumed", 0.2],
+        ["1500", "assumed", 0.2],
+        ["2000", "assumed", 0.25],
+        ["2500", "measured_shape", 0.45],
+        ["2800", "measured_shape", 0.45],
+        ["3000", "measured_shape", 0.45],
+        ["3200", "measured_shape", 0.45],
+        ["3500", "measured_shape", 0.4],
+        ["3800", "measured_shape", 0.4],
+        ["4000", "measured_shape", 0.45],
+        ["4200", "measured_shape", 0.4],
+        ["4500", "measured_shape", 0.45],
+        ["4800", "measured_shape", 0.5],
+        ["5000", "measured_shape", 0.5],
+        ["5500", "measured_shape", 0.5],
+        ["6000", "measured_shape", 0.5],
+        ["6400", "official", 0.95],
+        ["6500", "official", 0.95],
+        ["6600", "official", 0.95],
+        ["6800", "estimated", 0.55],
+        ["7000", "official_derived", 0.9],
+        ["7100", "estimated", 0.45],
+        ["7200", "estimated", 0.45],
+        ["7400", "measured", 0.6]
+      ]
     },
     "redline": {
-      "value": 7400, "min": 7200, "max": 7600, "unit": "1/min",
-      "source": "assumed", "method": "secondary_consensus_unverified",
-      "confidence": 0.30,
-      "note": "公式諸元表に記載なし。二次情報では 7,400rpm 前後、燃料カットは 7,450rpm 付近とされる。最高出力点 7,000rpm より上であることは確実。"
+      "value": 7400, "min": 7350, "max": 7450, "unit": "1/min",
+      "source": "measured", "method": "edmunds_dynojet_248_fuel_cut_measurement",
+      "confidence": 0.80,
+      "note": "燃料カット回転数の実測値 (Edmunds Dynojet 248 / 2013 FR-S)。タコメータのレッドゾーンと一致。以前は assumed / 0.30 だった。"
     },
     "idle_rpm": {
       "value": 700, "min": 650, "max": 800, "unit": "1/min",
@@ -170,10 +207,10 @@
       }
     },
     "drivetrain_efficiency": {
-      "value": 0.90, "min": 0.86, "max": 0.94, "unit": "-",
-      "source": "assumed", "method": "typical_rwd_manual_gearbox_plus_propshaft_plus_final",
+      "value": 0.87, "min": 0.83, "max": 0.90, "unit": "-",
+      "source": "estimated", "method": "dyno_173whp_vs_official_147kW_crank",
       "confidence": 0.35,
-      "note": "エンジン軸から駆動輪までの総合効率。FR はギアボックス + プロペラシャフト + ハイポイドファイナルを通るため FF より1段損失が多い。0-100km/h に直接効くパラメータで、Optimizer が真っ先に触りたがる場所。Level 3 だが、ここを動かして辻褄を合わせるのは実質チート(憲法ルール9)。"
+      "note": "エンジン軸から駆動輪までの総合効率。公称147kW(197.1hp)に対し Dynojet 実測 173whp(129kW) → 0.878。ただし Dynojet は楽観的に出る傾向があるため範囲を広く取っている。FR はギアボックス + プロペラシャフト + ハイポイドファイナルを通るため FF より1段損失が多い。0-100km/h に直接効くパラメータで、Optimizer が真っ先に触りたがる場所。ここを動かして辻褄を合わせるのは実質チート(憲法ルール9)。"
     },
     "clutch_capacity": "unknown"
   },
@@ -204,12 +241,33 @@
   "suspension": {
     "front_type": { "value": "マクファーソンストラット式コイルスプリング", "source": "official", "confidence": 1.0 },
     "rear_type":  { "value": "ダブルウィッシュボーン式コイルスプリング", "source": "official", "confidence": 1.0 },
-    "spring_rate_front": "unknown",
-    "spring_rate_rear": "unknown",
+    "spring_rate_front": {
+      "value": 22000, "min": 19000, "max": 26000, "unit": "N/m",
+      "source": "estimated", "method": "ride_frequency_1_30_to_1_45Hz_with_strut_motion_ratio",
+      "confidence": 0.25,
+      "note": "乗り心地周波数法。前軸バネ上約574kg → 1コーナー287kg、目標周波数 1.30-1.45Hz でホイールレート 19-22 N/mm、ストラットのモーションレシオ ~0.95-1.0 で換算。上限の根拠: HKS Hipermax（スポーツ用車高調）が F:27 N/mm。純正がスポーツ車高調より硬いことはあり得ない。",
+      "WARNING": "モーションレシオが unknown のため、この値だけではホイールレートが決まらない。準静的モデルでは未使用(#19)。"
+    },
+    "spring_rate_rear": {
+      "value": 33000, "min": 27000, "max": 38000, "unit": "N/m",
+      "source": "estimated", "method": "ride_frequency_method_rear",
+      "confidence": 0.20,
+      "note": "同上。リアはダブルウィッシュボーンでモーションレシオが前と異なる。"
+    },
     "damper_front": "unknown",
     "damper_rear": "unknown",
-    "arb_front": "unknown",
-    "arb_rear": "unknown",
+    "arb_front": {
+      "value": 0.018, "unit": "m",
+      "source": "measured", "method": "aftermarket_manufacturer_listings_multiple_agree",
+      "confidence": 0.75,
+      "note": "純正スタビライザー径 18mm。社外スタビメーカー複数社（Cusco 販売店 / Racecomp / FunctionTheory / 雑誌スペック表）が一致して記載。DATA_SOURCE_POLICY.md §3-5『部品メーカーが自社製品との比較で述べる純正値は複数社一致で採用可』に該当。"
+    },
+    "arb_rear": {
+      "value": 0.014, "unit": "m",
+      "source": "measured", "method": "aftermarket_manufacturer_listings_multiple_agree",
+      "confidence": 0.75,
+      "note": "純正スタビライザー径 14mm。前後比 18/14 は FR としてはリア寄りが細く、アンダー方向の設定。"
+    },
     "roll_stiffness_distribution_front": {
       "value": 0.60, "min": 0.52, "max": 0.68, "unit": "-",
       "source": "assumed", "method": "typical_rwd_understeer_biased_setup",
@@ -250,22 +308,35 @@
   },
 
   "tires": {
-    "size": { "value": "215/45R17", "source": "secondary", "confidence": 0.6,
-              "note": "GTグレードは17インチ専用アルミという公式記述はあるが、取得した諸元表PDFにタイヤサイズの記載がなかった。215/45R17 は二次情報での一致。Source A での確認が必要。G/RCは16インチ。" },
-    "oem_brand": "unknown",
+    "size": { "value": "215/45R17 87W", "source": "measured", "confidence": 0.75,
+              "method": "edmunds_test_car_fitment_plus_toyota_europe_material",
+              "note": "【出所に注意】データドロップは official / 0.95 としていたが、取得済みの公式諸元表(2015-02)にタイヤの行は存在しない(Docs/SOURCE_A_VERIFICATION.md で確認済み)。official を名乗る一次資料が示されていないため measured に落としてある。根拠は Edmunds 試験車の実装タイヤと Toyota 欧州資料。サービスマニュアルか純正部品資料が取れたら official に上げること(#4)。G/RC は 205/55R16。" },
+    "oem_brand": { "value": "Michelin Primacy HP", "source": "measured", "confidence": 0.80,
+                   "method": "edmunds_test_car_plus_toyota_europe_material",
+                   "note": "純正装着銘柄。タイヤモデルのパラメータ探索(TireModel_A/B/C)の出発点になる。" },
+    "wheel": { "value": "17x7J +48 PCD100 5H hub56", "source": "secondary", "confidence": 0.75,
+               "method": "parts_listing_consensus",
+               "note": "GT グレードの純正ホイール。ホイール慣性の推定に使う。" },
     "unloaded_radius": {
-      "value": 0.31265, "unit": "m",
-      "source": "estimated", "method": "geometry_from_tire_size_215_45R17",
-      "confidence": 0.60,
-      "note": "サイドウォール = 215mm * 0.45 = 96.75mm、リム = 17in = 431.8mm、外径 = 431.8 + 2*96.75 = 625.30mm。confidence はタイヤサイズ(secondary/0.6)を超えない。"
+      "value": 0.3127, "min": 0.3120, "max": 0.3135, "unit": "m",
+      "source": "calculated", "method": "jatma_nominal_dimensions_from_tire_size",
+      "confidence": 0.85,
+      "note": "JATMA 呼称寸法: (17*25.4 + 2*215*0.45)/2 = 312.65mm。市販銘柄の実寸 625-626mm と整合。サイズさえ正しければ一意に決まるため estimated ではなく calculated。"
     },
     "effective_radius": {
-      "value": 0.3033, "min": 0.3001, "max": 0.3064, "unit": "m",
-      "source": "estimated", "method": "unloaded_radius_times_deflection_factor_0_97",
-      "confidence": 0.50,
-      "note": "荷重下の有効転がり半径。無負荷半径 0.31265m にたわみ係数 0.96-0.98 を掛けた範囲。乗用車の一般値。タイヤサイズが secondary/0.6 のため confidence はそれ以下(#4)。"
+      "value": 0.3055, "min": 0.3020, "max": 0.3085, "unit": "m",
+      "source": "estimated", "method": "re_approx_static_plus_two_unloaded_over_three",
+      "confidence": 0.60,
+      "note": "有効転がり半径 R_e ~= (R_static + 2*R_unloaded)/3。【独立検証あり】6速(0.767) x ファイナル(4.100) と組んで 100km/h のとき 2,731rpm となり、実車の6速100km/h ≒ 2,700rpm と一致する。",
+      "WARNING": "縦断モデルはこの1個の値で全速度域がスケールする。変更したら必ず ギア比 x ファイナル x R_e の逆算チェック（Tests/test_physics_components.py）を通すこと。"
     },
     "_rejected_effective_radius": "greeco-channel の 0.316m は採用しない。無負荷半径 0.31265m を 1.1% 上回っており、荷重下の有効転がり半径が無負荷半径を超えることは物理的にあり得ない。以前は「算出根拠不明」を理由としていたが、幾何計算により物理法則違反であることが確認できた。",
+    "static_loaded_radius": {
+      "value": 0.293, "min": 0.288, "max": 0.298, "unit": "m",
+      "source": "estimated", "method": "45_series_radial_deflection_6_7pct_at_4_4kN_220kPa",
+      "confidence": 0.35,
+      "note": "静的荷重半径。有効転がり半径の算出に使う。"
+    },
     "vertical_stiffness": {
       "value": 210000, "min": 170000, "max": 250000, "unit": "N/m",
       "source": "assumed", "method": "typical_45_series_street_tire",
@@ -273,10 +344,12 @@
       "note": "タイヤ縦バネ定数。準静的荷重移動モデルでは未使用。垂直方向の動特性を入れる段階で必要になる。"
     },
     "friction_coefficient": {
-      "value": 1.10, "min": 0.90, "max": 1.30, "unit": "-",
-      "source": "assumed", "method": "typical_summer_street_tire_dry_asphalt",
-      "confidence": 0.30,
-      "note": "乾燥アスファルト上のピークμ。荷重感度は tire.load_sensitivity で別に扱う(μは荷重とともに低下する)。【警告】Optimizer がシミュレーション結果を実測に近づけるために真っ先に触る場所。μを動かす前に必ず入力データ(トルクカーブ・ファイナル・有効半径)を疑うこと(憲法ルール9)。"
+      "value": 1.007, "min": 0.95, "max": 1.06, "unit": "-",
+      "source": "estimated", "method": "calibrated_to_measured_skidpad_0_82g",
+      "confidence": 0.55,
+      "note": "乾燥アスファルト上のピークμ。**実測スキッドパッド 0.82g に合うよう較正した値。** 半径30.5m(200ft径)の定常円をモデルで回し、mu=1.007 で 0.820g となることを確認。以前は assumed 1.10 だったが、それでは 0.873g となり実測より 6.5% 過大だった。confidence は元になったスキッドパッド実測(0.65)とモデル側の仮定を考慮して 0.55。",
+      "CIRCULARITY_WARNING": "**スキッドパッドは較正の入力になったので、以後これをモデルの検証指標として使ってはいけない（循環論法になる）。** 独立に残っている検証指標は 0-60mph / 1/4mile / 制動距離 / スラローム / ダイノ出力。",
+      "WARNING_optimizer": "Optimizer がシミュレーション結果を実測に近づけるために真っ先に触る場所。μを動かす前に必ず入力データ(トルクカーブ・ファイナル・有効半径)を疑うこと(憲法ルール9)。この値は既に実測に紐づいているので、動かすなら min/max の範囲内に限る。"
     },
     "load_sensitivity": {
       "value": 0.00008, "min": 0.00004, "max": 0.00014, "unit": "1/N",
@@ -313,10 +386,10 @@
 
   "aerodynamics": {
     "cd": {
-      "value": 0.29, "min": 0.27, "max": 0.32, "unit": "-",
-      "source": "assumed", "method": "typical_low_slung_sports_coupe",
-      "confidence": 0.30,
-      "note": "公式諸元表に記載なし(#6)。低全高のスポーツクーペの一般的な範囲。0-100km/h への寄与は小さいが(100km/h で抗力 ~330N、駆動力の 5% 程度)、最高速には支配的に効く。"
+      "value": 0.27, "min": 0.27, "max": 0.30, "unit": "-",
+      "source": "official_marketing", "method": "toyota_europe_gt86_press_kit_design_chapter",
+      "confidence": 0.75,
+      "note": "Toyota Europe GT86 プレスキット（デザイン章）。測定風洞・仕様が非公開で、かつ欧州GT86基準のため official ではなく official_marketing とした。公式カタログ値は最良条件で出ることが多いので max 側を 0.30 まで開けてある。【最高速による較正を禁止】Docs/DATA_SOURCE_POLICY.md §6 を参照。"
     },
     "frontal_area": {
       "value": 1.94, "min": 1.85, "max": 2.05, "unit": "m^2",
@@ -334,10 +407,79 @@
   },
 
   "validation_targets": {
-    "_note": "Reality Validator 用の比較対象。Day 1 の最初の課題は、この値をどの出典で確定させるかを決めること。情報源によって値がばらつくため、先に採用ルールを決めないと後段の検証が機能しない。",
+    "_policy": "Docs/DATA_SOURCE_POLICY.md に従う。実測値は単一の点ではなく分布として保持する。合否は『正規化後の [P10, P90] に入るか』で判定し、P50 に近づける最適化は禁止（憲法ルール9）。",
+
+    "accel_0_60_mph": {
+      "value": 7.10, "min": 6.60, "max": 7.60, "unit": "s",
+      "source": "measured", "method": "distribution_of_five_instrumented_tests_protocol_normalised",
+      "confidence": 0.55,
+      "note": "【単一値ではなく帯】同一車種・同一エンジン・同一ミッションで 6.2-8.1s、ばらつき 30.6%。生の P10-P90 は 6.52-7.78s。ロールアウト補正・TC on/off・標高を正規化した後の帯として 6.60-7.60s を採る。value は中央値。合格判定はこの帯に入るかどうかで行い、6.2s ちょうどに合わせにいってはいけない。",
+      "distribution": [
+        {"value": 6.2, "source": "Motor Trend", "note": "1/4mile 14.80s @95.1mph"},
+        {"value": 7.0, "source": "Edmunds", "note": "1ft rollout 補正後。生値 7.3"},
+        {"value": 7.1, "source": "2016 FR-S test", "note": "1/4mile 15.4s @93mph"},
+        {"value": 7.3, "source": "Edmunds", "note": "rollout なし、TC off"},
+        {"value": 8.1, "source": "Car and Driver", "note": "1/4mile 16.30s @90.0mph"}
+      ],
+      "n_sources": 5
+    },
+
     "acceleration_0_100_kmh": "unknown",
-    "braking_100_0_m": "unknown",
-    "top_speed": "unknown",
-    "skidpad_lateral_g": "unknown"
+    "_acceleration_0_100_kmh_note": "JDM ZN6 にはメーカー公称の 0-100km/h が存在しない。上記の実測は全て 0-60mph(96.56km/h) であり、metric が違う。**換算して比較しないこと。** モデル側も 0-60mph を計算して同じ metric で突き合わせる。0-100km/h の直接実測が取れたらここを埋める。",
+
+    "quarter_mile": {
+      "value": 15.40, "min": 14.80, "max": 16.30, "unit": "s",
+      "source": "measured", "method": "distribution_of_four_instrumented_tests",
+      "confidence": 0.55,
+      "note": "4出典の分布 [14.8, 15.4, 15.5, 16.3]。0-60mph と同じ試験の副次指標なので独立ではない。",
+      "distribution": [14.8, 15.4, 15.5, 16.3],
+      "n_sources": 4
+    },
+
+    "braking_60_0_mph": {
+      "value": 37.49, "min": 35.0, "max": 40.0, "unit": "m",
+      "source": "measured", "method": "edmunds_instrumented_test",
+      "confidence": 0.65,
+      "note": "123 ft。減速度に直すと 9.60 m/s^2 = 0.978 g。**これが縦方向のμの下限を与える。** 横方向(スキッドパッド 0.82g)より 19% 高い = タイヤの摩擦特性は円ではなく楕円。現行のタイヤモデルは縦横で同じμを使う摩擦円なので、この差を表現できない(#21)。",
+      "weak": true
+    },
+
+    "braking_30_0_mph": {
+      "value": 8.84, "min": 8.2, "max": 9.5, "unit": "m",
+      "source": "measured", "method": "edmunds_instrumented_test",
+      "confidence": 0.60,
+      "note": "29 ft。出典1つのみのため weak(DATA_SOURCE_POLICY.md §5)。",
+      "weak": true
+    },
+
+    "skidpad_lateral_acceleration": {
+      "value": 8.0415, "min": 7.845, "max": 8.630, "unit": "m/s^2",
+      "source": "measured", "method": "edmunds_skidpad_esc_on_and_off_both_0_82g",
+      "confidence": 0.65,
+      "note": "0.82 g（範囲 0.80-0.88 g）。ESC on/off とも同値。**タイヤμに対する唯一の実効的な制約条件。** TireModel_A/B/C の探索はこの値を再現できることを必須条件とする。"
+    },
+
+    "slalom_speed": {
+      "value": 29.19, "unit": "m/s",
+      "source": "measured", "method": "edmunds_slalom_esc_off",
+      "confidence": 0.60,
+      "note": "65.3 mph。出典1つのみのため weak。**弱検証指標を根拠に Level 2/3 パラメータを変更してはいけない**(DATA_SOURCE_POLICY.md §5)。異常検知にのみ使う。",
+      "weak": true
+    },
+
+    "dyno_peak_wheel_power": {
+      "value": 129006, "min": 125000, "max": 133000, "unit": "W",
+      "source": "measured", "method": "edmunds_dynojet_248",
+      "confidence": 0.60,
+      "note": "173 whp。公称クランク 147kW(197.1hp) との比が駆動効率 0.878 を与える。Dynojet は楽観的に出る傾向があるため範囲を広く取る。"
+    },
+
+    "top_speed": {
+      "value": 62.78, "unit": "m/s",
+      "source": "secondary", "confidence": 0.30,
+      "method": "published_figure_226kmh",
+      "EXCLUDED_FROM_CALIBRATION": true,
+      "note": "226 km/h。**較正入力から明示的に除外する。** CdA=0.524 と 129kW から釣り合いを逆算すると約 259km/h になり、公表最高速はパワーリミットではない（速度制限か保守的計測）。これで CdA を較正すると空力が実車の約1.5倍になる(DATA_SOURCE_POLICY.md §6)。"
+    }
   }
 }
