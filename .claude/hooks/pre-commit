@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# git が呼ぶエントリポイント。
+#
+# git が見るのは core.hooksPath で指定したディレクトリの中の `pre-commit` という名前。
+# 本体は pre-commit-gate.sh に置き、こちらは薄いラッパーにしてある。
+#
+# 有効化（clone ごとに1回）:
+#   git config core.hooksPath .claude/hooks
+exec "$(dirname "$0")/pre-commit-gate.sh" "$@"
