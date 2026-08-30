@@ -1,6 +1,7 @@
-"""Tools/ をインポート可能にする。"""
+"""Tools/ Physics/ Tracks/ をインポート可能にする。"""
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "Tools"))
+for sub in ("Tools", "Physics", "Tracks"):
+    sys.path.insert(0, str(REPO_ROOT / sub))

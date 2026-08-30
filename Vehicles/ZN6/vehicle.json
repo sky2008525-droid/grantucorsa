@@ -42,7 +42,12 @@
     "occupants":       { "value": 4, "unit": "persons", "source": "official", "confidence": 1.0 },
     "front_axle_mass": "unknown",
     "rear_axle_mass":  "unknown",
-    "weight_distribution_front_pct": "unknown",
+    "weight_distribution_front_pct": {
+      "value": 0.53, "min": 0.51, "max": 0.55, "unit": "-",
+      "source": "assumed", "method": "secondary_consensus_unverified",
+      "confidence": 0.35,
+      "note": "二次情報で 53:47 前後の記述が散見されるが一次資料で未検証(#5)。物理モデルが荷重移動計算に必要とするため assumed として置く。範囲は二次情報のばらつき。Source B 以上が取れたら差し替えること。"
+    },
     "_note": "重量配分は公式諸元表に記載がない。53:47 前後の値が二次情報に散見されるが未検証。Source B 以上の出典が取れるまで unknown。"
   },
 
@@ -57,10 +62,30 @@
       "confidence": 0.75,
       "note": "トヨタが「超低重心（重心高460mm）」として公表。諸元表ではなく販促資料由来のため confidence を下げている。測定条件（乗員・燃料の有無）が不明。CL1版仕様書 §5.2 の例では cg_height を estimated/0.35 としていたが、ZN6 では公表値があるため探索範囲を狭められる。"
     },
-    "cg_longitudinal_from_front_axle": "unknown",
-    "Ixx": "unknown",
-    "Iyy": "unknown",
-    "Izz": "unknown",
+    "cg_longitudinal_from_front_axle": {
+      "value": 1.208, "min": 1.157, "max": 1.259, "unit": "m",
+      "source": "estimated", "method": "wheelbase_times_rear_weight_fraction",
+      "confidence": 0.40,
+      "note": "Lf = wheelbase * (1 - front_pct) = 2.570 * 0.47。重量配分が assumed のため confidence はそれ以下に抑える。Lr = 2.570 - Lf = 1.362 m。"
+    },
+    "Ixx": {
+      "value": 480, "min": 380, "max": 600, "unit": "kg*m^2",
+      "source": "assumed", "method": "scaled_from_mass_and_track",
+      "confidence": 0.25,
+      "note": "ロール慣性。Ixx ~= m * (k*track/2)^2、k=0.55 として概算。バネ上/バネ下の分離ができていないため精度は低い。準静的荷重移動モデルでは未使用。ロール動特性を入れる段階で要検証。"
+    },
+    "Iyy": {
+      "value": 1900, "min": 1500, "max": 2300, "unit": "kg*m^2",
+      "source": "assumed", "method": "scaled_from_mass_and_wheelbase",
+      "confidence": 0.25,
+      "note": "ピッチ慣性。準静的荷重移動モデルでは未使用。"
+    },
+    "Izz": {
+      "value": 2023, "min": 1700, "max": 2350, "unit": "kg*m^2",
+      "source": "estimated", "method": "izz_approx_mass_times_lf_times_lr",
+      "confidence": 0.40,
+      "note": "ヨー慣性。乗用車で広く使われる近似 Izz ~= m * Lf * Lr = 1230 * 1.208 * 1.362。スポーツクーペの実測は概ね 1800-2200 kg*m^2 の範囲で、その中に収まる。重量配分が assumed のため confidence はそれ以下。"
+    },
     "sprung_mass": "unknown",
     "unsprung_mass_front": "unknown",
     "unsprung_mass_rear": "unknown"
@@ -80,12 +105,44 @@
                          "note": "147kW = 200PS (ネット値)。後期6MTは152kW(207PS)。基準車両は前期のため147kW。" },
     "max_torque":      { "value": 205, "unit": "N*m", "at_rpm_min": 6400, "at_rpm_max": 6600, "source": "official", "confidence": 1.0,
                          "note": "後期6MTは212N*m/6,400-6,800rpm。" },
-    "torque_curve":    "unknown",
-    "_torque_curve_note": "最重要未収集項目。2点(最大出力/最大トルク)だけで補間してはいけない。FA20は4,000rpm付近にトルクの谷があることが広く知られており、2点補間ではこの特性が完全に消える。シャシダイ実測(エンジン軸換算)を Source B で複数取得すること。",
-    "redline": "unknown",
-    "idle_rpm": "unknown",
-    "friction_model": "unknown",
-    "rotational_inertia": "unknown"
+    "torque_curve": {
+      "value": [
+        [1000, 150.0], [1500, 170.0], [2000, 185.0], [2500, 192.0],
+        [3000, 196.0], [3500, 193.0], [4000, 180.0], [4500, 186.0],
+        [5000, 194.0], [5500, 199.0], [6000, 203.0], [6400, 205.0],
+        [6600, 205.0], [7000, 200.5], [7400, 188.0]
+      ],
+      "unit": "N*m",
+      "rpm_unit": "1/min",
+      "source": "assumed",
+      "method": "shape_constructed_from_two_official_points_plus_known_dip",
+      "confidence": 0.30,
+      "note": "【重要】これは実測ではない。#3 が閉じるまでの仮置き。構成: (a) 最大トルク 205 N*m / 6,400-6,600rpm と最高出力 147kW / 7,000rpm の公式2点で固定。7,000rpm のトルクは P/omega = 147000/733.0 = 200.5 N*m として算出。(b) FA20 に広く知られる 4,000rpm 付近の谷を形状として与えた。(c) 残りは NA 直4/水平対向の一般的な曲線形状。ZN6_BASELINE.md の警告どおり2点補間ではないが、谷の深さと位置に出典が無い。この値から導かれた加速結果は Reality Validator の検証対象にしてはいけない。【補間後の検算】PCHIP補間したカーブの最高出力は 147.5kW @ 7,130rpm となり、公式の定格点(147kW @ 7,000rpm)に対し出力で +0.3%、回転数で +1.9% ずれる。これは構成の失敗ではなく、公式値どうしの非整合による。最大トルク 205N*m を 6,400-6,600rpm で保ったまま出力の最大を厳密に 7,000rpm に置くには、6,800rpm 付近のトルクが 206N*m 超（=最大トルクを超える）である必要があり矛盾する。諸元表の「最高出力 @ 7,000rpm」は定格点であって曲線の厳密な極大ではないと解釈した。検証は極大の位置ではなく、公式2点の再現精度で行うこと。"
+    },
+    "redline": {
+      "value": 7400, "min": 7200, "max": 7600, "unit": "1/min",
+      "source": "assumed", "method": "secondary_consensus_unverified",
+      "confidence": 0.30,
+      "note": "公式諸元表に記載なし。二次情報では 7,400rpm 前後、燃料カットは 7,450rpm 付近とされる。最高出力点 7,000rpm より上であることは確実。"
+    },
+    "idle_rpm": {
+      "value": 700, "min": 650, "max": 800, "unit": "1/min",
+      "source": "assumed", "method": "typical_modern_na_four",
+      "confidence": 0.25,
+      "note": "公式記載なし。発進シミュレーション以外では影響しない。"
+    },
+    "friction_model": {
+      "value": 0.07, "min": 0.04, "max": 0.11, "unit": "N*m*s",
+      "source": "assumed", "method": "linear_engine_braking_coefficient_vs_angular_velocity",
+      "confidence": 0.20,
+      "note": "スロットル全閉時のエンジンブレーキトルク T = k * omega の線形係数。omega は rad/s。7,000rpm(733 rad/s) で約 51 N*m、アイドル(73 rad/s)で約 5 N*m となり、2.0L NA の一般的な範囲に収まる。実測なし。加速シミュレーションでは全開が主なので影響は小さいが、減速側とエンジンブレーキで効く。"
+    },
+    "rotational_inertia": {
+      "value": 0.15, "min": 0.10, "max": 0.25, "unit": "kg*m^2",
+      "source": "assumed", "method": "typical_na_four_crank_flywheel_clutch",
+      "confidence": 0.25,
+      "note": "クランク+フライホイール+クラッチの合計。低速ギアでの加速に効く(等価質量として車重に上乗せされる)。1速では有効慣性が実質 30-60kg 相当になるため無視できない。"
+    }
   },
 
   "transmission": {
@@ -112,16 +169,36 @@
         "all_6AT": 4.100
       }
     },
-    "drivetrain_efficiency": "unknown",
+    "drivetrain_efficiency": {
+      "value": 0.90, "min": 0.86, "max": 0.94, "unit": "-",
+      "source": "assumed", "method": "typical_rwd_manual_gearbox_plus_propshaft_plus_final",
+      "confidence": 0.35,
+      "note": "エンジン軸から駆動輪までの総合効率。FR はギアボックス + プロペラシャフト + ハイポイドファイナルを通るため FF より1段損失が多い。0-100km/h に直接効くパラメータで、Optimizer が真っ先に触りたがる場所。Level 3 だが、ここを動かして辻褄を合わせるのは実質チート(憲法ルール9)。"
+    },
     "clutch_capacity": "unknown"
   },
 
   "differential": {
     "type": { "value": "Torsen LSD", "source": "secondary", "confidence": 0.7,
               "note": "GT/GT\"Limited\"に標準装備、G/RCはオープンデフ、という記述が複数の二次情報で一致。ただし公式諸元表本文には型式記載がなく、脚注でトルセンLSDの選択に言及があるのみ。サービスマニュアルでの確認を推奨。" },
-    "preload": "unknown",
-    "accel_lock_ratio": "unknown",
-    "decel_lock_ratio": "unknown"
+    "preload": {
+      "value": 30.0, "min": 10.0, "max": 60.0, "unit": "N*m",
+      "source": "assumed", "method": "typical_torsen_t2_street",
+      "confidence": 0.20,
+      "note": "トルセンの初期トルク。実測なし。直線加速には効かず、コーナー脱出時の内外輪トルク配分に効く。"
+    },
+    "accel_lock_ratio": {
+      "value": 0.40, "min": 0.25, "max": 0.55, "unit": "-",
+      "source": "assumed", "method": "typical_torsen_t2_bias_ratio_converted",
+      "confidence": 0.20,
+      "note": "加速側ロック率。トルセンのバイアスレシオ 2.3:1 前後を差動制限率に換算した概算。FR + LSD ではコーナー脱出のパワーオンで内輪から外輪へトルクが移り、オーバーステアを助長する方向に働く(SPEC_ZN6.md §6.2)。"
+    },
+    "decel_lock_ratio": {
+      "value": 0.20, "min": 0.10, "max": 0.35, "unit": "-",
+      "source": "assumed", "method": "typical_torsen_t2_coast_side",
+      "confidence": 0.20,
+      "note": "減速側ロック率。トルセンは加速側より減速側が弱い。"
+    }
   },
 
   "suspension": {
@@ -133,6 +210,12 @@
     "damper_rear": "unknown",
     "arb_front": "unknown",
     "arb_rear": "unknown",
+    "roll_stiffness_distribution_front": {
+      "value": 0.60, "min": 0.52, "max": 0.68, "unit": "-",
+      "source": "assumed", "method": "typical_rwd_understeer_biased_setup",
+      "confidence": 0.25,
+      "note": "前後ロール剛性配分。準静的な横方向荷重移動を前後に分けるために必要。FR は前を硬めにして安定側(アンダー方向)に振るのが一般的。【この値を動かすとオーバー/アンダーの性格が直接変わる】Optimizer が挙動を合わせるために触りやすい場所なので、変更時は必ず理由を残すこと。"
+    },
     "geometry": "unknown"
   },
 
@@ -152,23 +235,89 @@
     "disc_diameter_rear": "unknown",
     "master_cylinder_diameter": "unknown",
     "pad_friction_coefficient": "unknown",
-    "brake_bias": "unknown"
+    "brake_bias": {
+      "value": 0.65, "min": 0.58, "max": 0.72, "unit": "-",
+      "source": "assumed", "method": "typical_rwd_coupe_front_bias",
+      "confidence": 0.25,
+      "note": "前輪が受け持つブレーキトルクの割合。制動時は前軸に荷重が移るため前寄りになる。ディスク径・マスターシリンダー径が unknown のため、油圧系からは導けず配分のみで扱う。"
+    },
+    "max_brake_torque_total": {
+      "value": 12000, "min": 9000, "max": 15000, "unit": "N*m",
+      "source": "assumed", "method": "sized_to_exceed_tire_friction_limit",
+      "confidence": 0.20,
+      "note": "4輪合計の最大ブレーキトルク。実車のブレーキはタイヤの摩擦限界を上回る能力を持つ(だからロックする)ように設計されるため、タイヤ限界を確実に超える値を置いた。制動距離はブレーキ容量ではなくタイヤμで決まる。"
+    }
   },
 
   "tires": {
     "size": { "value": "215/45R17", "source": "secondary", "confidence": 0.6,
               "note": "GTグレードは17インチ専用アルミという公式記述はあるが、取得した諸元表PDFにタイヤサイズの記載がなかった。215/45R17 は二次情報での一致。Source A での確認が必要。G/RCは16インチ。" },
     "oem_brand": "unknown",
-    "effective_radius": "unknown",
-    "_note": "greeco-channel が有効半径0.316mを使用しているが算出根拠不明のため採用しない。純正サイズ確定後に幾何計算すること。",
-    "vertical_stiffness": "unknown",
-    "friction_coefficient": "unknown",
+    "unloaded_radius": {
+      "value": 0.31265, "unit": "m",
+      "source": "estimated", "method": "geometry_from_tire_size_215_45R17",
+      "confidence": 0.60,
+      "note": "サイドウォール = 215mm * 0.45 = 96.75mm、リム = 17in = 431.8mm、外径 = 431.8 + 2*96.75 = 625.30mm。confidence はタイヤサイズ(secondary/0.6)を超えない。"
+    },
+    "effective_radius": {
+      "value": 0.3033, "min": 0.3001, "max": 0.3064, "unit": "m",
+      "source": "estimated", "method": "unloaded_radius_times_deflection_factor_0_97",
+      "confidence": 0.50,
+      "note": "荷重下の有効転がり半径。無負荷半径 0.31265m にたわみ係数 0.96-0.98 を掛けた範囲。乗用車の一般値。タイヤサイズが secondary/0.6 のため confidence はそれ以下(#4)。"
+    },
+    "_rejected_effective_radius": "greeco-channel の 0.316m は採用しない。無負荷半径 0.31265m を 1.1% 上回っており、荷重下の有効転がり半径が無負荷半径を超えることは物理的にあり得ない。以前は「算出根拠不明」を理由としていたが、幾何計算により物理法則違反であることが確認できた。",
+    "vertical_stiffness": {
+      "value": 210000, "min": 170000, "max": 250000, "unit": "N/m",
+      "source": "assumed", "method": "typical_45_series_street_tire",
+      "confidence": 0.25,
+      "note": "タイヤ縦バネ定数。準静的荷重移動モデルでは未使用。垂直方向の動特性を入れる段階で必要になる。"
+    },
+    "friction_coefficient": {
+      "value": 1.10, "min": 0.90, "max": 1.30, "unit": "-",
+      "source": "assumed", "method": "typical_summer_street_tire_dry_asphalt",
+      "confidence": 0.30,
+      "note": "乾燥アスファルト上のピークμ。荷重感度は tire.load_sensitivity で別に扱う(μは荷重とともに低下する)。【警告】Optimizer がシミュレーション結果を実測に近づけるために真っ先に触る場所。μを動かす前に必ず入力データ(トルクカーブ・ファイナル・有効半径)を疑うこと(憲法ルール9)。"
+    },
+    "load_sensitivity": {
+      "value": 0.00008, "min": 0.00004, "max": 0.00014, "unit": "1/N",
+      "source": "assumed", "method": "linear_mu_decay_with_vertical_load",
+      "confidence": 0.20,
+      "note": "mu(Fz) = mu0 * (1 - k * (Fz - Fz_nominal))。荷重が増えるほどμが下がる特性。これが無いと荷重移動の効果が正しく出ない(SPEC_ZN6.md §6.3)。"
+    },
+    "rolling_resistance_coefficient": {
+      "value": 0.012, "min": 0.009, "max": 0.016, "unit": "-",
+      "source": "assumed", "method": "typical_summer_street_tire_on_asphalt",
+      "confidence": 0.25,
+      "note": "転がり抵抗係数。F = Crr * Fz。0-100km/h への寄与は小さい(1230kg で約145N、駆動力の3%程度)が、最高速と惰行では効く。"
+    },
+    "longitudinal_stiffness_per_load": {
+      "value": 20.0, "min": 14.0, "max": 28.0, "unit": "-",
+      "source": "assumed", "method": "typical_street_tire_normalized_longitudinal_stiffness",
+      "confidence": 0.25,
+      "note": "正規化縦剛性 C_kappa / Fz [-]。スリップ率に対する縦力の立ち上がり。街乗りタイヤは 14-28。発進加速の初期でホイールスピンするかどうかを左右する。"
+    },
+    "cornering_stiffness_per_load": {
+      "value": 14.0, "min": 10.0, "max": 18.0, "unit": "1/rad",
+      "source": "assumed", "method": "typical_street_tire_normalized_cornering_stiffness",
+      "confidence": 0.25,
+      "note": "正規化コーナリング剛性 C_alpha / Fz [1/rad]。Fiala モデルの入力。街乗りタイヤは 10-18、ハイグリップは 20 以上。"
+    },
     "model_parameters": "unknown"
   },
 
   "aerodynamics": {
-    "cd": "unknown",
-    "frontal_area": "unknown",
+    "cd": {
+      "value": 0.29, "min": 0.27, "max": 0.32, "unit": "-",
+      "source": "assumed", "method": "typical_low_slung_sports_coupe",
+      "confidence": 0.30,
+      "note": "公式諸元表に記載なし(#6)。低全高のスポーツクーペの一般的な範囲。0-100km/h への寄与は小さいが(100km/h で抗力 ~330N、駆動力の 5% 程度)、最高速には支配的に効く。"
+    },
+    "frontal_area": {
+      "value": 1.94, "min": 1.85, "max": 2.05, "unit": "m^2",
+      "source": "estimated", "method": "width_times_roof_height_times_0_85",
+      "confidence": 0.40,
+      "note": "A ~= 0.85 * 全幅 * ルーフ高 = 0.85 * 1.775 * 1.285。【全高 1.320 を使わないこと】アンテナを含む数値であり、投影面積の計算に使うと過大になる(ZN6_BASELINE.md 罠②)。"
+    },
     "lift_coefficient_front": "unknown",
     "lift_coefficient_rear": "unknown",
     "_note": "Cd値は公式諸元表に記載なし。CL1版仕様書 §10.1 でも Aerodynamics は 50/100・Low(0.3) と最低スコアだった。ZN6でも同様に最も不確実な領域になる見込み。"
