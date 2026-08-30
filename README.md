@@ -45,9 +45,10 @@
 | 1 | [`Docs/HANDOFF.md`](Docs/HANDOFF.md) | **現在の方針。最優先。** 元仕様書の外側で決まったこと |
 | 2 | [`Docs/ZN6_BASELINE.md`](Docs/ZN6_BASELINE.md) | 基準車両の確定理由と、検証で見つかった罠2件 |
 | 3 | [`Docs/SPEC_ZN6.md`](Docs/SPEC_ZN6.md) | **要件定義書。** 作業仕様の本体 |
-| 4 | [`Docs/SOURCE_A_VERIFICATION.md`](Docs/SOURCE_A_VERIFICATION.md) | 公式諸元表と `vehicle.json` の照合記録。**PDFはテキスト抽出できない** |
-| 5 | [`Docs/DATA_COLLECTION_ZN6.md`](Docs/DATA_COLLECTION_ZN6.md) | 収集項目リスト（14カテゴリ） |
-| 6 | [`Docs/SPEC_PHASE2_BACKLOG.md`](Docs/SPEC_PHASE2_BACKLOG.md) | 退避したフェーズ |
+| 4 | [`Docs/AGENT_TOPOLOGY.md`](Docs/AGENT_TOPOLOGY.md) | 「作るAI」と「疑うAI」の分離。**評価のオラクルは層によって違う** |
+| 5 | [`Docs/SOURCE_A_VERIFICATION.md`](Docs/SOURCE_A_VERIFICATION.md) | 公式諸元表と `vehicle.json` の照合記録。**PDFはテキスト抽出できない** |
+| 6 | [`Docs/DATA_COLLECTION_ZN6.md`](Docs/DATA_COLLECTION_ZN6.md) | 収集項目リスト（14カテゴリ） |
+| 7 | [`Docs/SPEC_PHASE2_BACKLOG.md`](Docs/SPEC_PHASE2_BACKLOG.md) | 退避したフェーズ |
 | — | [`Docs/SPEC_CL1_original.md`](Docs/SPEC_CL1_original.md) | **編集禁止。** ZN6 へ切り替える前の元仕様書。差分の基準点 |
 | — | [`Docs/RULE_CLASSIFICATION.md`](Docs/RULE_CLASSIFICATION.md) | 憲法18ルールをどう三層に分類したかの記録 |
 
