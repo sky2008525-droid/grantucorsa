@@ -109,6 +109,7 @@ CL1（FF）前提で書かれた元仕様書から変わった点。
 |---|---|
 | `Docs/SPEC_ZN6.md` | **仕様書 兼 要件定義書。現行版** |
 | `Docs/ZN6_BASELINE.md` | 基準車両の確定理由、罠2件の詳細 |
+| `Docs/SOURCE_A_VERIFICATION.md` | 公式諸元表との照合記録。**このPDFはテキスト抽出できない** |
 | `Docs/HANDOFF.md` | 方針変更の経緯（履歴） |
 | `Docs/DATA_COLLECTION_ZN6.md` | 収集項目リスト（14カテゴリ） |
 | `Docs/SPEC_PHASE2_BACKLOG.md` | 退避したフェーズ |

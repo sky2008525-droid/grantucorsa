@@ -146,8 +146,8 @@
 
   "brakes": {
     "front_type": { "value": "ベンチレーテッドディスク", "source": "official", "confidence": 1.0 },
-    "rear_type":  { "value": "ディスク", "source": "official", "confidence": 0.8,
-                    "note": "公式諸元表の抽出テキストではグレード間の対応が曖昧。RCはリアがソリッドディスクで径も小さいという二次情報あり。GT基準での確定にはサービスマニュアル要確認。" },
+    "rear_type":  { "value": "ベンチレーテッドディスク", "source": "official", "confidence": 1.0,
+                    "note": "諸元表を描画して確認済み(Docs/SOURCE_A_VERIFICATION.md)。リヤブレーキ欄はGT\"Limited\"とGTが「ベンチレーテッドディスク」、Gが「ディスク」。基準車両はGTなのでベンチレーテッド。以前は「ディスク」(=Gの値)が入っていた。PDFのテキスト抽出ではグレード列の対応が取れないことが原因。" },
     "disc_diameter_front": "unknown",
     "disc_diameter_rear": "unknown",
     "master_cylinder_diameter": "unknown",
