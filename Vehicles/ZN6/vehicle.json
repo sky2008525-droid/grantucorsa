@@ -1,0 +1,188 @@
+{
+  "_meta": {
+    "schema_version": "0.1.0",
+    "created": "2026-08-30",
+    "note": "Day 1 用の最小セット。物理モデルが実際に読む項目のみ。ここに無い項目は未収集であり、存在しないことを意味しない。追加時は必ず source / confidence / unit を付けること。",
+    "baseline": "Docs/ZN6_BASELINE.md を参照。基準車両を変える場合はこのファイルを作り直す。"
+  },
+
+  "identity": {
+    "manufacturer": "Toyota",
+    "model": "86",
+    "chassis_code": "ZN6",
+    "type_designation": "DBA-ZN6-D2E8",
+    "grade": "GT",
+    "transmission_type": "6MT",
+    "generation": "前期 (pre-facelift)",
+    "market": "JDM",
+    "drivetrain": "FR",
+    "engine_code": "FA20",
+    "source": "official",
+    "reference": "toyota.jp 86 主要諸元表 2015-02",
+    "confidence": 1.0
+  },
+
+  "dimensions": {
+    "length":          { "value": 4.240, "unit": "m", "source": "official", "confidence": 1.0 },
+    "width":           { "value": 1.775, "unit": "m", "source": "official", "confidence": 1.0 },
+    "height_incl_antenna": { "value": 1.320, "unit": "m", "source": "official", "confidence": 1.0 },
+    "roof_height":     { "value": 1.285, "unit": "m", "source": "official", "confidence": 1.0,
+                         "note": "公式諸元表は全高1,320mm(アンテナ含む)/ルーフ高1,285mmと明記。二次情報の多くが記載する1,300mmはどちらとも一致しない。3Dモデルのスケール補正にはroof_heightを使うこと。" },
+    "wheelbase":       { "value": 2.570, "unit": "m", "source": "official", "confidence": 1.0 },
+    "track_front":     { "value": 1.520, "unit": "m", "source": "official", "confidence": 1.0 },
+    "track_rear":      { "value": 1.540, "unit": "m", "source": "official", "confidence": 1.0 },
+    "ground_clearance":{ "value": 0.130, "unit": "m", "source": "official", "confidence": 1.0 },
+    "min_turning_radius": { "value": 5.4, "unit": "m", "source": "official", "confidence": 1.0 }
+  },
+
+  "mass": {
+    "curb_mass":       { "value": 1230, "unit": "kg", "source": "official", "confidence": 1.0,
+                         "note": "車検証重量。GT 6MT。GT 6AT は1250、G 6MT は1210、G 6AT/GT\"Limited\" 6MT は1230、GT\"Limited\" 6AT は1250。" },
+    "gross_mass":      { "value": 1450, "unit": "kg", "source": "official", "confidence": 1.0 },
+    "occupants":       { "value": 4, "unit": "persons", "source": "official", "confidence": 1.0 },
+    "front_axle_mass": "unknown",
+    "rear_axle_mass":  "unknown",
+    "weight_distribution_front_pct": "unknown",
+    "_note": "重量配分は公式諸元表に記載がない。53:47 前後の値が二次情報に散見されるが未検証。Source B 以上の出典が取れるまで unknown。"
+  },
+
+  "inertia": {
+    "cg_height": {
+      "value": 0.460,
+      "min": 0.44,
+      "max": 0.48,
+      "unit": "m",
+      "source": "official_marketing",
+      "method": "manufacturer_published_figure",
+      "confidence": 0.75,
+      "note": "トヨタが「超低重心（重心高460mm）」として公表。諸元表ではなく販促資料由来のため confidence を下げている。測定条件（乗員・燃料の有無）が不明。CL1版仕様書 §5.2 の例では cg_height を estimated/0.35 としていたが、ZN6 では公表値があるため探索範囲を狭められる。"
+    },
+    "cg_longitudinal_from_front_axle": "unknown",
+    "Ixx": "unknown",
+    "Iyy": "unknown",
+    "Izz": "unknown",
+    "sprung_mass": "unknown",
+    "unsprung_mass_front": "unknown",
+    "unsprung_mass_rear": "unknown"
+  },
+
+  "engine": {
+    "code":            { "value": "FA20", "source": "official", "confidence": 1.0 },
+    "layout":          { "value": "水平対向4気筒 直噴DOHC", "source": "official", "confidence": 1.0 },
+    "displacement":    { "value": 1.998, "unit": "L", "source": "official", "confidence": 1.0 },
+    "bore":            { "value": 0.0860, "unit": "m", "source": "official", "confidence": 1.0 },
+    "stroke":          { "value": 0.0860, "unit": "m", "source": "official", "confidence": 1.0,
+                         "note": "スクエア (bore = stroke)" },
+    "compression_ratio": { "value": 12.5, "unit": "-", "source": "official", "confidence": 1.0 },
+    "fuel":            { "value": "無鉛プレミアムガソリン", "source": "official", "confidence": 1.0 },
+    "injection":       { "value": "D-4S 筒内直接＋ポート噴射", "source": "official", "confidence": 1.0 },
+    "max_power":       { "value": 147000, "unit": "W", "at_rpm": 7000, "source": "official", "confidence": 1.0,
+                         "note": "147kW = 200PS (ネット値)。後期6MTは152kW(207PS)。基準車両は前期のため147kW。" },
+    "max_torque":      { "value": 205, "unit": "N*m", "at_rpm_min": 6400, "at_rpm_max": 6600, "source": "official", "confidence": 1.0,
+                         "note": "後期6MTは212N*m/6,400-6,800rpm。" },
+    "torque_curve":    "unknown",
+    "_torque_curve_note": "最重要未収集項目。2点(最大出力/最大トルク)だけで補間してはいけない。FA20は4,000rpm付近にトルクの谷があることが広く知られており、2点補間ではこの特性が完全に消える。シャシダイ実測(エンジン軸換算)を Source B で複数取得すること。",
+    "redline": "unknown",
+    "idle_rpm": "unknown",
+    "friction_model": "unknown",
+    "rotational_inertia": "unknown"
+  },
+
+  "transmission": {
+    "type":            { "value": "6MT", "source": "official", "confidence": 1.0 },
+    "gear_ratios": {
+      "1": { "value": 3.626, "unit": "-", "source": "official", "confidence": 1.0 },
+      "2": { "value": 2.188, "unit": "-", "source": "official", "confidence": 1.0 },
+      "3": { "value": 1.541, "unit": "-", "source": "official", "confidence": 1.0 },
+      "4": { "value": 1.213, "unit": "-", "source": "official", "confidence": 1.0 },
+      "5": { "value": 1.000, "unit": "-", "source": "official", "confidence": 1.0 },
+      "6": { "value": 0.767, "unit": "-", "source": "official", "confidence": 1.0 },
+      "R": { "value": 3.437, "unit": "-", "source": "official", "confidence": 1.0 }
+    },
+    "final_drive": {
+      "value": 4.100,
+      "unit": "-",
+      "source": "official",
+      "confidence": 1.0,
+      "note": "【重要】ZN6のファイナルは単一値ではない。GT/GT\"Limited\"および6AT全車は4.100。G 6MT のみ 3.727（トルセンLSDをオプション選択した場合は4.100）。基準車両をGからGTへ変えた場合ここが変わる。公式諸元表の脚注*1に明記。",
+      "variants": {
+        "G_6MT_open_diff": 3.727,
+        "G_6MT_with_torsen": 4.100,
+        "GT_GTLimited_all": 4.100,
+        "all_6AT": 4.100
+      }
+    },
+    "drivetrain_efficiency": "unknown",
+    "clutch_capacity": "unknown"
+  },
+
+  "differential": {
+    "type": { "value": "Torsen LSD", "source": "secondary", "confidence": 0.7,
+              "note": "GT/GT\"Limited\"に標準装備、G/RCはオープンデフ、という記述が複数の二次情報で一致。ただし公式諸元表本文には型式記載がなく、脚注でトルセンLSDの選択に言及があるのみ。サービスマニュアルでの確認を推奨。" },
+    "preload": "unknown",
+    "accel_lock_ratio": "unknown",
+    "decel_lock_ratio": "unknown"
+  },
+
+  "suspension": {
+    "front_type": { "value": "マクファーソンストラット式コイルスプリング", "source": "official", "confidence": 1.0 },
+    "rear_type":  { "value": "ダブルウィッシュボーン式コイルスプリング", "source": "official", "confidence": 1.0 },
+    "spring_rate_front": "unknown",
+    "spring_rate_rear": "unknown",
+    "damper_front": "unknown",
+    "damper_rear": "unknown",
+    "arb_front": "unknown",
+    "arb_rear": "unknown",
+    "geometry": "unknown"
+  },
+
+  "steering": {
+    "type": { "value": "ラック＆ピニオン式 電動パワーステアリング", "source": "official", "confidence": 1.0 },
+    "wheel_diameter": { "value": 0.365, "unit": "m", "source": "secondary", "confidence": 0.7,
+                        "note": "前期365mm、後期362mm。トヨタ最小径として言及されている。" },
+    "gear_ratio": "unknown",
+    "lock_to_lock": "unknown"
+  },
+
+  "brakes": {
+    "front_type": { "value": "ベンチレーテッドディスク", "source": "official", "confidence": 1.0 },
+    "rear_type":  { "value": "ディスク", "source": "official", "confidence": 0.8,
+                    "note": "公式諸元表の抽出テキストではグレード間の対応が曖昧。RCはリアがソリッドディスクで径も小さいという二次情報あり。GT基準での確定にはサービスマニュアル要確認。" },
+    "disc_diameter_front": "unknown",
+    "disc_diameter_rear": "unknown",
+    "master_cylinder_diameter": "unknown",
+    "pad_friction_coefficient": "unknown",
+    "brake_bias": "unknown"
+  },
+
+  "tires": {
+    "size": { "value": "215/45R17", "source": "secondary", "confidence": 0.6,
+              "note": "GTグレードは17インチ専用アルミという公式記述はあるが、取得した諸元表PDFにタイヤサイズの記載がなかった。215/45R17 は二次情報での一致。Source A での確認が必要。G/RCは16インチ。" },
+    "oem_brand": "unknown",
+    "effective_radius": "unknown",
+    "_note": "greeco-channel が有効半径0.316mを使用しているが算出根拠不明のため採用しない。純正サイズ確定後に幾何計算すること。",
+    "vertical_stiffness": "unknown",
+    "friction_coefficient": "unknown",
+    "model_parameters": "unknown"
+  },
+
+  "aerodynamics": {
+    "cd": "unknown",
+    "frontal_area": "unknown",
+    "lift_coefficient_front": "unknown",
+    "lift_coefficient_rear": "unknown",
+    "_note": "Cd値は公式諸元表に記載なし。CL1版仕様書 §10.1 でも Aerodynamics は 50/100・Low(0.3) と最低スコアだった。ZN6でも同様に最も不確実な領域になる見込み。"
+  },
+
+  "fuel": {
+    "tank_capacity": { "value": 50, "unit": "L", "source": "official", "confidence": 1.0 }
+  },
+
+  "validation_targets": {
+    "_note": "Reality Validator 用の比較対象。Day 1 の最初の課題は、この値をどの出典で確定させるかを決めること。情報源によって値がばらつくため、先に採用ルールを決めないと後段の検証が機能しない。",
+    "acceleration_0_100_kmh": "unknown",
+    "braking_100_0_m": "unknown",
+    "top_speed": "unknown",
+    "skidpad_lateral_g": "unknown"
+  }
+}
