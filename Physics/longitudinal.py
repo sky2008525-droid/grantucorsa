@@ -79,16 +79,22 @@ class LongitudinalModel:
     def __init__(
         self,
         data: VehicleData,
-        shift_time_s: float = 0.40,
+        shift_time_s: float = 0.25,
         launch_rpm: float = 3500.0,
     ) -> None:
         """
         shift_time_s / launch_rpm は **車両の仕様ではなくドライバーと測定手順の
         パラメータ**。`vehicle.json` に入れていないのはそのため。
 
-        **公開されている 0-100km/h の実測値がばらつく主因の1つがここ。**
+        **公開されている実測値がばらつく主因の1つがここ。**
         変速時間が 0.2s 違えば、5回変速すれば 1.0s 変わる。出典を比較するときは
-        測定条件を必ず確認すること（issue #1）。
+        測定条件を必ず確認すること（Docs/DATA_SOURCE_POLICY.md §2）。
+
+        既定値 0.25s の根拠: 比較対象が計測誌のインストゥルメンテッドテスト
+        （Motor Trend / Edmunds / Car and Driver）であり、プロドライバーが
+        タイム計測のために全開で走らせている。以前の 0.40s は一般的な street
+        shift の値で、この試験条件には合わない。**ただし各誌が実際に何秒で
+        変速したかは公開されていない。** 0.20-0.30s の範囲は仮定である。
         """
         self.data = data
         self.shift_time_s = shift_time_s
