@@ -302,3 +302,61 @@ def test_異常検出が過大なGを拾う():
         "RR_fy_n": 0.0, "RL_fy_n": 0.0,
     }]
     assert any("G が過大" in p for p in log.detect_anomalies())
+
+
+# --- 独立検証（μ を較正していない指標での照合）----------------------------
+
+
+def _braking_distance_m(car, initial_speed_mps, dt_s=0.001):
+    state = car.initial_state(initial_speed_mps)
+    distance = 0.0
+    time_s = 0.0
+    while state.vx_mps > 0.3 and time_s < 15.0:
+        state, _ = car.step(state, ControlInput(brake=1.0, gear="4"), dt_s)
+        distance += state.vx_mps * dt_s
+        time_s += dt_s
+    return distance
+
+
+def test_制動距離が実測と一致する_独立検証(car):
+    """**μ を較正していない指標での照合。いまのところ唯一の独立検証。**
+
+    タイヤμはスキッドパッド（横方向 0.82g）に較正してある。制動はそこに
+    合わせていないので、一致すれば独立した裏付けになる。
+
+    実測: 60-0mph = 123 ft (37.49 m) / Edmunds。
+    ただし出典が1つなので `weak`。DATA_SOURCE_POLICY.md §5 により、
+    **これを根拠に Level 2/3 パラメータを変更してはいけない。** 照合のみ。
+    """
+    MPH = 0.44704
+    distance = _braking_distance_m(car, 60 * MPH)
+    assert distance == pytest.approx(37.49, rel=0.06), (
+        "60-0mph が {:.2f} m。実測は 37.49 m (123 ft)".format(distance)
+    )
+
+
+def test_等方のμが旋回と制動を同時に再現する(car, data):
+    """**旋回と制動で μ から実現 g への変換が違う。**
+
+    実測の横 0.82g と 縦 0.978g を直接比べると比 1.19 になり、
+    「タイヤの摩擦特性が円ではなく楕円だ」と解釈したくなる。**これは誤り**
+    （issue #21 として起票し、検証の結果クローズした）。
+
+      旋回: 外輪に荷重が集中し、荷重感度で μ が落ちる。内輪はほぼ寄与しない
+            → 実現できる横 g は μ より大幅に低い
+      制動: 荷重は前後に移るが4輪とも接地荷重が残る
+            → 実現できる縦 g は μ に近い
+
+    等方の μ=1.007 ひとつが、旋回 0.820g と 制動 0.985g を同時に再現する。
+    縦μを 1.19 倍にすると制動距離が実測より 15% 短くなり、**改悪になる。**
+
+    **実測された g どうしを直接比べてタイヤの性質を推定してはいけない。**
+    """
+    MPH = 0.44704
+    distance = _braking_distance_m(car, 60 * MPH)
+    decel_g = (60 * MPH) ** 2 / (2 * distance) / GRAVITY_MPS2
+
+    mu = data.value("tires.friction_coefficient", "-")
+    assert 0.93 < decel_g / mu < 1.02, "制動では実現 g が μ に近いはず"
+    # 横方向は較正済みの 0.82g。μ に対する比は制動よりずっと低い
+    assert 0.82 / mu < 0.86, "旋回では実現 g が μ よりかなり低いはず"
