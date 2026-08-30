@@ -134,8 +134,12 @@ grantucorsa/
 検証:
 
 ```bash
-python3 Tools/validate_vehicle.py Vehicles/ZN6/vehicle.json
+python3 Tools/validate_vehicle.py Vehicles/ZN6/vehicle.json   # スキーマ検証
+python3 Tools/validate_vehicle.py --list-level0               # 保護対象の一覧
+python3 -m pytest Tests                                       # 回帰テスト
 ```
+
+いずれもコミット前フックが自動で実行する。
 
 ---
 
