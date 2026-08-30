@@ -1,23 +1,132 @@
-### AL ###
-#Template for AL projects for Dynamics 365 Business Central
-#launch.json folder
-.vscode/
-#Cache folder
-.alcache/
-#Symbols folder
-.alpackages/
-#Snapshots folder
-.snapshots/
-#Testing Output folder
-.output/
-#Extension App-file
-*.app
-#Rapid Application Development File
-rad.json
-#Translation Base-file
-*.g.xlf
-#License-files
-*.bclicense
-*.flf
-#Test results file
-TestResults.xml
+# grantucorsa .gitignore
+#
+# 初期状態は AL (Microsoft Dynamics 365 Business Central) 用テンプレートだった。
+# このプロジェクトとは無関係なため全面差し替えした。詳細は Docs/HANDOFF.md §8。
+#
+# 方針:
+#   - 再生成できるもの（ビルド成果物・キャッシュ・自動保存）だけを無視する
+#   - .vscode/ は無視しない。エディタ設定はチーム共有の対象とする（HANDOFF.md §8）
+#   - 収集した実車画像・Tripo 生成モデルは Phase 9 以降でリポジトリに置く設計のため無視しない
+
+# ---------------------------------------------------------------
+# Python / venv
+# ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+.venv/
+venv/
+env/
+ENV/
+
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------
+# Unreal Engine 5   （Phase 8 まで未導入 / HANDOFF.md §2）
+# ---------------------------------------------------------------
+Unreal/**/Binaries/
+Unreal/**/Build/
+Unreal/**/DerivedDataCache/
+Unreal/**/Intermediate/
+Unreal/**/Saved/
+Unreal/**/Script/
+Unreal/**/.vs/
+
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+*.suo
+*.sln
+*.xcodeproj/
+*.xcworkspace/
+
+# UE5 が生成するプラットフォーム別中間物
+Unreal/**/*.target
+Unreal/**/*.modules
+
+# ---------------------------------------------------------------
+# Blender   （Phase 11 まで未導入 / bpy をモジュールとして使う方針）
+# ---------------------------------------------------------------
+*.blend1
+*.blend2
+*.blend[0-9]
+*.blend[0-9][0-9]
+blender_autosave/
+
+# ---------------------------------------------------------------
+# Claude Code
+# ---------------------------------------------------------------
+# 共有するもの: .claude/rules/, .claude/hooks/, .claude/settings.json, CLAUDE.md
+# 各自の環境依存の許可設定だけを除外する
+.claude/settings.local.json
+.claude/**/*.local.json
+
+# ---------------------------------------------------------------
+# OS が生成するファイル
+# ---------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.AppleDouble
+.LSOverride
+Icon?
+
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+*~
+.nfs*
+
+# ---------------------------------------------------------------
+# エディタ / ツール
+# ---------------------------------------------------------------
+# .vscode/ は意図的に無視しない（HANDOFF.md §8）
+.idea/
+*.swp
+*.swo
+
+# ---------------------------------------------------------------
+# 一時ファイル・ログ
+# ---------------------------------------------------------------
+*.log
+*.tmp
+*.bak
+tmp/
+scratch/
+
+# ---------------------------------------------------------------
+# 未決事項（意図的にコメントアウトしてある）
+# ---------------------------------------------------------------
+# テレメトリーログ (Data/*.csv) を追跡するかは未決。
+# 再生成可能な出力だが、Reality Validator の検証根拠として残す価値もある。
+# Phase 6（AIドライバー）でログが実際に出始めてから判断する。
+# Data/**/*.csv
+#
+# Phase 9 以降で Tripo 生成 GLB・PBR テクスチャ・FBX を置くと
+# リポジトリが急激に肥大する。そのタイミングで Git LFS の導入を検討すること。
