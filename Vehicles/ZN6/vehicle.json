@@ -72,7 +72,7 @@
     "displacement":    { "value": 1.998, "unit": "L", "source": "official", "confidence": 1.0 },
     "bore":            { "value": 0.0860, "unit": "m", "source": "official", "confidence": 1.0 },
     "stroke":          { "value": 0.0860, "unit": "m", "source": "official", "confidence": 1.0,
-                         "note": "スクエア (bore = stroke)" },
+                         "note": "スクエア (bore = stroke)。FA20 の特徴。" },
     "compression_ratio": { "value": 12.5, "unit": "-", "source": "official", "confidence": 1.0 },
     "fuel":            { "value": "無鉛プレミアムガソリン", "source": "official", "confidence": 1.0 },
     "injection":       { "value": "D-4S 筒内直接＋ポート噴射", "source": "official", "confidence": 1.0 },
