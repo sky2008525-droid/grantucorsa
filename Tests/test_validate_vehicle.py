@@ -291,3 +291,45 @@ def test_基準車両がGTの前提を保つ():
     assert d["transmission"]["final_drive"]["value"] == 4.100
     # 3Dスケール補正の基準はルーフ高。全高1.320はアンテナ込み
     assert d["dimensions"]["roof_height"]["value"] == 1.285
+
+
+# --- 環境の健全性 ---------------------------------------------------------
+# コードではなく環境を検査する。層1は git の設定に依存しており、
+# 設定を忘れると「何も起きない」形で無効になるため、ここで大きく失敗させる。
+
+
+def test_コミット前ゲートが有効になっている():
+    """core.hooksPath は .git/config に入るためリポジトリに含まれない。
+
+    マシンを変えて clone し直したら ./Tools/setup.sh を実行すること。
+    設定を忘れると層1が黙って無効になり、Level 0 の変更もスキーマ違反も
+    テスト失敗も素通りする。エラーも警告も出ない。
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "config", "--get", "core.hooksPath"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert result.stdout.strip() == ".claude/hooks", (
+        "コミット前ゲートが有効になっていない。./Tools/setup.sh を実行すること。"
+        " 現在の core.hooksPath: {!r}".format(result.stdout.strip())
+    )
+
+
+@pytest.mark.parametrize("relative", [
+    ".claude/hooks/pre-commit",
+    ".claude/hooks/pre-commit-gate.sh",
+    "Tools/setup.sh",
+])
+def test_シェルスクリプトがLFである(relative):
+    """CRLF になるとフックが動かなくなる。
+
+    Git for Windows は既定で core.autocrlf=true のため、.gitattributes が
+    無いと .sh が CRLF に変換され、`#!/usr/bin/env bash` の行末に \\r が付いて
+    `bad interpreter: /usr/bin/env bash^M` になる。
+    """
+    path = REPO_ROOT / relative
+    assert b"\r\n" not in path.read_bytes(), (
+        "{} が CRLF になっている。フックが動かない。".format(relative)
+    )

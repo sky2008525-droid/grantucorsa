@@ -1,0 +1,58 @@
+# 改行コードの正規化
+#
+# **このファイルが無いと Windows でクローンしたときにフックが壊れる。**
+# Git for Windows は既定で core.autocrlf=true のため、シェルスクリプトが CRLF に
+# 変換され、`#!/usr/bin/env bash` の行末に \r が付いて
+# `bad interpreter: /usr/bin/env bash^M` になる。
+# 層1（コミット前ゲート）が黙って動かなくなるのが最悪のケース。
+
+# 既定は LF。テキスト判定は git に任せる
+* text=auto eol=lf
+
+# 実行されるもの。CRLF になったら確実に壊れる
+*.sh            text eol=lf
+*.py            text eol=lf
+.claude/hooks/pre-commit text eol=lf
+
+# 設定・データ
+*.json          text eol=lf
+*.md            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.toml          text eol=lf
+*.cfg           text eol=lf
+*.csv           text eol=lf
+
+# Windows 専用のバッチだけは CRLF
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# ---------------------------------------------------------------
+# バイナリ（改行変換をかけてはいけない）
+# ---------------------------------------------------------------
+*.pdf           binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.webp          binary
+
+# Phase 9 以降で追加されるもの。先に宣言しておく
+*.glb           binary
+*.gltf          binary
+*.fbx           binary
+*.obj           binary
+*.blend         binary
+*.uasset        binary
+*.umap          binary
+*.wav           binary
+*.mp3           binary
+*.ogg           binary
+*.exr           binary
+*.hdr           binary
+*.tga           binary
+
+# ---------------------------------------------------------------
+# 差分の見え方
+# ---------------------------------------------------------------
+# vehicle.json は最重要データ。差分を読みやすくする
+Vehicles/**/*.json diff=json

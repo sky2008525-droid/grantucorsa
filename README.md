@@ -61,17 +61,53 @@
 ```bash
 git clone https://github.com/sky2008525-droid/grantucorsa.git
 cd grantucorsa
-
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install numpy scipy matplotlib pytest
-
-# コミット前ゲートを有効化（これを実行しないとフックは動かない）
-git config core.hooksPath .claude/hooks
+./Tools/setup.sh
 ```
 
-`git config core.hooksPath` は clone ごとに1回必要。`.git/hooks/` はリポジトリに含まれないため、
-フック本体を `.claude/hooks/` に置いて git にそこを見させる構成にしている。
+Windows は **Git Bash**（Git for Windows 付属）で実行する。
+
+`Tools/setup.sh` がやること: `core.hooksPath` の設定 / `.venv` の作成 /
+numpy・scipy・matplotlib・pytest の導入 / 動作確認。
+
+### なぜスクリプトにしてあるか
+
+**`core.hooksPath` は `.git/config` に入るためリポジトリに含まれない。**
+`.git/hooks/` も同様に含まれないので、フック本体を `.claude/hooks/` に置いて
+git にそこを見させる構成にしている。
+
+**設定を忘れると層1が黙って無効になる。** エラーも警告も出ず、
+Level 0 の変更もスキーマ違反もテスト失敗も素通りする。これが最も危険な失敗の仕方なので、
+手順を1コマンドにまとめ、さらに `pytest` で検出できるようにしてある
+（`Tests/test_validate_vehicle.py::test_コミット前ゲートが有効になっている`）。
+
+---
+
+## マシンを移すとき
+
+**clone したら必ず `./Tools/setup.sh` を実行すること。** 忘れると上記のとおり層1が無効になる。
+
+`.gitattributes` で改行コードを LF に固定してある。これが無いと Windows で
+`.sh` が CRLF に変換され、`bad interpreter: /usr/bin/env bash^M` でフックが動かなくなる。
+
+### フェーズごとに必要なマシン
+
+| Phase | 内容 | Mac | GPU 搭載機 |
+|---|---|---|---|
+| 3 | 車両データ収集 | ○ | — |
+| **4〜7** | **物理モデル / 4輪統合 / AIドライバー(PID) / テストコース** | **○ これで足りる** | — |
+| 6+ | 強化学習(RL)を導入する場合 | △ 遅い | **○ CUDA が効く** |
+| **8** | **UE5 統合** | △ 動くが厳しい | **○ 実質必須** |
+| 9〜10 | 画像収集 / Tripo AI（ブラウザ） | ○ | ○ |
+| 11〜12 | Blender 補正ループ / PBR | △ Metal で動く | ○ GPU レンダが速い |
+| **13** | **UE5 グラフィック統合（Nanite / Lumen）** | ✗ | **○ 必須** |
+| 14〜15 | 音響 / 実在コース | ○ | ○ |
+| 16〜17 | Validator / Optimizer | ○ CPU 主体 | ○ コア数が効く |
+
+**第1完成目標（灰色の ZN6 がテストコースを1周する）は Mac のままで到達できる。**
+確認に UE5 は不要で、matplotlib のアニメーションで足りる（`Docs/HANDOFF.md` §4）。
+
+**移行の目安は Phase 8（UE5 導入）。** それより前に移すと、環境構築のコストを
+先払いするだけで得るものがない。
 
 ---
 

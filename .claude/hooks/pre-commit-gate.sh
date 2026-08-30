@@ -28,13 +28,20 @@ cd "$REPO_ROOT"
 VALIDATOR="Tools/validate_vehicle.py"
 FAILED=0
 
-# venv があればそれを使う。無ければシステムの python3。
+# venv があればそれを使う。無ければシステムの python。
+# Windows の venv は .venv/Scripts/python.exe（POSIX は .venv/bin/python3）。
+# Git for Windows の bash から呼ばれることを想定している。
 if [ -x ".venv/bin/python3" ]; then
     PYTHON=".venv/bin/python3"
+elif [ -x ".venv/Scripts/python.exe" ]; then
+    PYTHON=".venv/Scripts/python.exe"
 elif command -v python3 >/dev/null 2>&1; then
     PYTHON="python3"
+elif command -v python >/dev/null 2>&1 && python -c "import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)" 2>/dev/null; then
+    PYTHON="python"
 else
-    echo "pre-commit-gate: python3 が見つからない。検証できないためコミットを止める" >&2
+    echo "pre-commit-gate: Python 3 が見つからない。検証できないためコミットを止める" >&2
+    echo "  venv を作る:  python3 -m venv .venv" >&2
     exit 1
 fi
 
