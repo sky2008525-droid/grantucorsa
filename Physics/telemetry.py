@@ -18,7 +18,8 @@ COLUMNS = [
     "time_s", "distance_m", "track_index",
     "speed_kmh", "vx_mps", "vy_mps", "yaw_rate_rads", "sideslip_deg",
     "ax_g", "ay_g",
-    "throttle", "brake", "steer_deg", "gear", "engine_rpm",
+    "throttle", "brake", "handbrake", "clutch", "steer_deg", "gear", "engine_rpm",
+    "clutch_torque_nm", "clutch_slip_rads",
     "target_speed_kmh", "lateral_error_m", "traction_cut", "spin_detected",
 ] + [
     "{}_{}".format(w, k)
@@ -50,6 +51,10 @@ class TelemetryLog:
             "ay_g": outputs.ay_mps2 / GRAVITY_MPS2,
             "throttle": control.throttle,
             "brake": control.brake,
+            "handbrake": control.handbrake,
+            "clutch": control.clutch,
+            "clutch_torque_nm": outputs.clutch_torque_nm,
+            "clutch_slip_rads": outputs.clutch_slip_rads,
             "steer_deg": math.degrees(control.steer_rad),
             "gear": int(control.gear),
             "engine_rpm": outputs.engine_rpm,

@@ -220,7 +220,12 @@
       "confidence": 0.35,
       "note": "エンジン軸から駆動輪までの総合効率。公称147kW(197.1hp)に対し Dynojet 実測 173whp(129kW) → 0.878。ただし Dynojet は楽観的に出る傾向があるため範囲を広く取っている。FR はギアボックス + プロペラシャフト + ハイポイドファイナルを通るため FF より1段損失が多い。0-100km/h に直接効くパラメータで、Optimizer が真っ先に触りたがる場所。ここを動かして辻褄を合わせるのは実質チート(憲法ルール9)。"
     },
-    "clutch_capacity": "unknown"
+    "clutch_capacity": {
+      "value": 310.0, "min": 250.0, "max": 400.0, "unit": "N*m",
+      "source": "assumed", "method": "typical_1_5x_engine_peak_torque",
+      "confidence": 0.25,
+      "note": "クラッチが滑らずに伝えられる最大トルク。実車のクラッチはエンジン最大トルク(205 N*m)の 1.3-1.8 倍で設計される。**クラッチ蹴りではこの容量を超えないので、効果を決めるのは容量そのものより回転差と繋ぐ速さ。** 発進時の半クラッチ挙動には効く。"
+    }
   },
 
   "differential": {
@@ -306,6 +311,12 @@
       "source": "assumed", "method": "typical_rwd_coupe_front_bias",
       "confidence": 0.25,
       "note": "前輪が受け持つブレーキトルクの割合。制動時は前軸に荷重が移るため前寄りになる。ディスク径・マスターシリンダー径が unknown のため、油圧系からは導けず配分のみで扱う。"
+    },
+    "handbrake_torque_rear": {
+      "value": 2500.0, "min": 1800.0, "max": 3500.0, "unit": "N*m",
+      "source": "assumed", "method": "sized_to_lock_rear_wheels",
+      "confidence": 0.20,
+      "note": "サイドブレーキ（後輪のみ）の最大トルク。後輪1本の接地荷重 約2,800N x mu 1.0 x 有効半径 0.3055m = 約855 N*m、軸で約1,710 N*m あればロックする。それを確実に超える値を置いた。**ロックするかどうかしか効かない**ので、実測値が無くても実用上は足りる。ケーブル式の実車サイドブレーキは踏力ではなく引き量で効くため、レバー位置 0-1 に比例させている。"
     },
     "max_brake_torque_total": {
       "value": 12000, "min": 9000, "max": 15000, "unit": "N*m",

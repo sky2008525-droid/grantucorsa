@@ -22,6 +22,7 @@ class Brakes:
     def __init__(self, data: VehicleData) -> None:
         self.bias_front = data.value("brakes.brake_bias", "-")
         self.max_total_torque_nm = data.value("brakes.max_brake_torque_total", "N*m")
+        self.handbrake_torque_nm = data.value("brakes.handbrake_torque_rear", "N*m")
 
     def axle_torques_nm(self, pedal: float) -> Tuple[float, float]:
         """(前軸合計, 後軸合計) のブレーキトルク [N*m]（正の値）。
@@ -32,3 +33,15 @@ class Brakes:
             raise ValueError("pedal は 0.0-1.0。受け取った値: {}".format(pedal))
         total = self.max_total_torque_nm * pedal
         return total * self.bias_front, total * (1.0 - self.bias_front)
+
+    def handbrake_axle_torque_nm(self, lever: float) -> float:
+        """サイドブレーキによる**後軸のみ**のブレーキトルク [N*m]。
+
+        フットブレーキと違い前輪には効かない。後輪だけをロックさせるため、
+        **後輪の横力が消えて car が回り始める。** ドリフトの引き起こしに使う。
+
+        lever: 0.0 - 1.0（ケーブル式なので踏力ではなく引き量）
+        """
+        if not 0.0 <= lever <= 1.0:
+            raise ValueError("lever は 0.0-1.0。受け取った値: {}".format(lever))
+        return self.handbrake_torque_nm * lever

@@ -362,5 +362,5 @@ class Driver:
             brake=brake,
             steer_rad=steer,
             gear=self._gear,
-            clutch_engaged=not shifting,
+            clutch=0.0 if shifting else 1.0,
         )

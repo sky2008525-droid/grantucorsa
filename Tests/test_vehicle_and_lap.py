@@ -360,3 +360,130 @@ def test_等方のμが旋回と制動を同時に再現する(car, data):
     assert 0.93 < decel_g / mu < 1.02, "制動では実現 g が μ に近いはず"
     # 横方向は較正済みの 0.82g。μ に対する比は制動よりずっと低い
     assert 0.82 / mu < 0.86, "旋回では実現 g が μ よりかなり低いはず"
+
+
+# --- サイドブレーキ -------------------------------------------------------
+
+
+def test_サイドブレーキは後輪だけをロックする(car):
+    """フットブレーキと違い前輪には効かない。
+
+    **後輪だけをロックさせて横力を消す**ため、車が回り始める。
+    ドリフトの引き起こしに使う操作。
+    """
+    state = car.initial_state(20.0, gear="3")
+    for _ in range(500):
+        state, _ = car.step(
+            state, ControlInput(throttle=0.2, steer_rad=math.radians(4), gear="3"), 0.001
+        )
+    front_before = state.wheel_omega_rads["FL"]
+
+    for _ in range(500):
+        state, outputs = car.step(
+            state,
+            ControlInput(steer_rad=math.radians(4), gear="3", handbrake=1.0),
+            0.001,
+        )
+
+    assert state.wheel_omega_rads["RL"] < 1.0, "後輪がロックしていない"
+    assert state.wheel_omega_rads["FL"] > front_before * 0.5, "前輪まで止まっている"
+    assert outputs.slip_ratio["RL"] < -0.8, "後輪が滑っていない"
+
+
+def test_サイドブレーキで車が回り始める(car):
+    """後輪の横力が消えるのでヨーレートが増える。"""
+    state = car.initial_state(20.0, gear="3")
+    for _ in range(500):
+        state, _ = car.step(
+            state, ControlInput(throttle=0.2, steer_rad=math.radians(4), gear="3"), 0.001
+        )
+    yaw_before = abs(state.yaw_rate_rads)
+    sideslip_before = abs(state.sideslip_rad)
+
+    for _ in range(700):
+        state, _ = car.step(
+            state, ControlInput(steer_rad=math.radians(4), gear="3", handbrake=1.0), 0.001
+        )
+
+    assert abs(state.yaw_rate_rads) > yaw_before * 1.5
+    assert abs(state.sideslip_rad) > sideslip_before * 3.0
+
+
+def test_サイドブレーキの引き量の範囲外を拒否する(data):
+    from brake import Brakes
+
+    with pytest.raises(ValueError):
+        Brakes(data).handbrake_axle_torque_nm(1.5)
+
+
+# --- クラッチ -------------------------------------------------------------
+
+
+def test_繋がっているとエンジンと変速機入力が一致する(car):
+    """完全に繋がったクラッチはロック。回転差ゼロ。"""
+    state = car.initial_state(15.0, gear="2")
+    for _ in range(500):
+        state, outputs = car.step(state, ControlInput(throttle=0.5, gear="2"), 0.001)
+    assert abs(outputs.clutch_slip_rads) < 1e-6
+    assert outputs.clutch_torque_nm == pytest.approx(outputs.engine_torque_nm, rel=1e-6)
+
+
+def test_クラッチを切るとエンジンが空吹かしする(car):
+    """**エンジンが独立した回転状態を持っていることの検査。**
+
+    以前はエンジン回転を車輪速度から逆算していたため、クラッチを切っても
+    回転が上がらなかった。クラッチ蹴りが表現できない原因。
+    """
+    state = car.initial_state(15.0, gear="2")
+    for _ in range(300):
+        state, outputs = car.step(state, ControlInput(throttle=0.4, gear="2"), 0.001)
+    rpm_engaged = outputs.engine_rpm
+
+    for _ in range(250):
+        state, outputs = car.step(
+            state, ControlInput(throttle=1.0, gear="2", clutch=0.0), 0.001
+        )
+
+    assert outputs.engine_rpm > rpm_engaged * 1.4, "空吹かしできていない"
+    assert outputs.clutch_torque_nm == 0.0, "切っているのにトルクが伝わっている"
+
+
+def test_クラッチ蹴りでエンジン最大トルクを超える力が後輪に入る(car):
+    """**クラッチ蹴りの本質。**
+
+    空吹かしで溜めた回転エネルギーが、繋いだ瞬間に後輪へ叩き込まれる。
+    伝わるトルクはエンジンの最大トルク(205 N*m)を超える。
+    """
+    state = car.initial_state(15.0, gear="2")
+    for _ in range(300):
+        state, _ = car.step(state, ControlInput(throttle=0.4, gear="2"), 0.001)
+    for _ in range(250):
+        state, _ = car.step(state, ControlInput(throttle=1.0, gear="2", clutch=0.0), 0.001)
+
+    peak_torque = 0.0
+    peak_slip_ratio = 0.0
+    for i in range(150):
+        engagement = min(i / 80.0, 1.0)
+        state, outputs = car.step(
+            state, ControlInput(throttle=1.0, gear="2", clutch=engagement), 0.001
+        )
+        peak_torque = max(peak_torque, abs(outputs.clutch_torque_nm))
+        peak_slip_ratio = max(peak_slip_ratio, outputs.slip_ratio["RL"])
+
+    assert peak_torque > 205.0, "エンジン最大トルクを超えていない = 慣性が効いていない"
+    assert peak_slip_ratio > 0.05, "後輪が滑っていない"
+
+
+def test_時間刻みを変えても結果が変わらない(data, track):
+    """**数値の健全性。**
+
+    ロック判定を回転差で行っていたとき、刻みを 0.002 -> 0.004 に変えるだけで
+    ラップが 55s -> 82s になった。刻みが粗いと回転差が判定値を超えて
+    スリップ扱いになるためで、物理ではなく数値の問題だった。
+    """
+    times = []
+    for dt_s in (0.002, 0.004):
+        lap_time, _ = run_lap(Vehicle(data), track, dt_s=dt_s)
+        assert lap_time is not None
+        times.append(lap_time)
+    assert times[0] == pytest.approx(times[1], rel=0.03)

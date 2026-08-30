@@ -29,15 +29,20 @@ from typing import Dict, List, Optional, Tuple
 
 from aero import Aerodynamics
 from brake import Brakes
+from clutch import Clutch
 from differential import OpenDifferential, TorsenDifferential
 from drivetrain import FORWARD_GEARS, Drivetrain
 from engine import Engine
 from tire import Tire
-from units import GRAVITY_MPS2, rads_to_rpm
+from units import GRAVITY_MPS2, rads_to_rpm, rpm_to_rads
 from vehicle_data import VehicleData
 
 # 車輪の並び。FL=前左, FR=前右, RL=後左, RR=後右
 WHEELS = ("FL", "FR", "RL", "RR")
+
+# これ以下の回転差ならクラッチはロックしているとみなす [rad/s]
+# （約 20 rpm。実車のクラッチは繋がれば回転差ゼロ）
+LOCK_TOLERANCE_RADS = 2.0
 FRONT_WHEELS = ("FL", "FR")
 REAR_WHEELS = ("RL", "RR")
 
@@ -48,7 +53,17 @@ class ControlInput:
     brake: float = 0.0
     steer_rad: float = 0.0
     gear: str = "1"
-    clutch_engaged: bool = True
+    clutch: float = 1.0
+    """0.0 = 完全に切る / 1.0 = 完全に繋ぐ。**bool ではない。**
+
+    途中の値が半クラッチ。クラッチ蹴り（切って空吹かし -> 繋ぐ）を表現するのに要る。
+    """
+    handbrake: float = 0.0
+    """サイドブレーキの引き量 0.0-1.0。**後輪のみ**に効く。"""
+
+    @property
+    def clutch_engaged(self) -> bool:
+        return self.clutch > 0.5
 
 
 @dataclass
@@ -60,6 +75,11 @@ class VehicleState:
     y_m: float = 0.0
     heading_rad: float = 0.0
     wheel_omega_rads: Dict[str, float] = field(default_factory=lambda: {w: 0.0 for w in WHEELS})
+    engine_omega_rads: float = 0.0
+    """**エンジンの回転は独立した状態変数。**
+
+    以前は車輪速度から逆算していたため、クラッチを切ってもエンジンが空吹かし
+    できず、繋いでもトルクの叩き込みが起きなかった。"""
 
     @property
     def speed_mps(self) -> float:
@@ -80,6 +100,8 @@ class VehicleOutputs:
     yaw_accel_rads2: float = 0.0
     engine_rpm: float = 0.0
     engine_torque_nm: float = 0.0
+    clutch_torque_nm: float = 0.0
+    clutch_slip_rads: float = 0.0
     tire_fz_n: Dict[str, float] = field(default_factory=dict)
     tire_fx_n: Dict[str, float] = field(default_factory=dict)
     tire_fy_n: Dict[str, float] = field(default_factory=dict)
@@ -97,6 +119,7 @@ class Vehicle:
         self.engine = Engine(data)
         self.drivetrain = Drivetrain(data)
         self.brakes = Brakes(data)
+        self.clutch = Clutch(data)
         self.aero = Aerodynamics(data)
         self.differential = TorsenDifferential(data) if use_lsd else OpenDifferential()
 
@@ -113,6 +136,8 @@ class Vehicle:
         )
         self.crr = data.value("tires.rolling_resistance_coefficient", "-")
         self.wheel_inertia_kgm2 = data.value("tires.wheel_rotational_inertia", "kg*m^2")
+        self.engine_inertia_kgm2 = data.value("engine.rotational_inertia", "kg*m^2")
+        self.idle_omega_rads = rpm_to_rads(data.value("engine.idle_rpm", "1/min"))
 
         weight_n = self.mass_kg * GRAVITY_MPS2
         self.tire = Tire(data, nominal_load_n=weight_n / 4.0)
@@ -184,21 +209,23 @@ class Vehicle:
         ay_prev = getattr(self, "_last_ay", 0.0)
         fz = self.wheel_loads_n(ax_prev, ay_prev)
 
-        # --- エンジンと駆動系 ---
+        # --- エンジンとクラッチ ---
+        #
+        # **エンジンは独立した回転状態を持つ。** 車輪から逆算しない。
+        #   I_e * domega/dt = T_engine(omega, throttle) - T_clutch
+        # クラッチは回転差に応じてトルクを伝え、容量で頭打ちになる。
+        #
+        # 数値的に硬いのでエンジンだけ細かく刻む。
         rear_omega_mean = (
             state.wheel_omega_rads["RL"] + state.wheel_omega_rads["RR"]
         ) / 2.0
-        engine_omega = self.drivetrain.engine_omega_rads(rear_omega_mean, control.gear)
-        engine_rpm = rads_to_rpm(engine_omega)
+        gearbox_omega = self.drivetrain.engine_omega_rads(rear_omega_mean, control.gear)
 
-        if control.clutch_engaged:
-            engine_torque = self.engine.torque_nm(
-                max(engine_omega, 0.0), control.throttle
-            )
-            axle_torque = self.drivetrain.wheel_torque_nm(engine_torque, control.gear)
-        else:
-            engine_torque = 0.0
-            axle_torque = 0.0
+        engine_omega, clutch_torque, engine_torque, clutch_locked = self._integrate_engine(
+            state.engine_omega_rads, gearbox_omega, control, dt_s
+        )
+        engine_rpm = rads_to_rpm(engine_omega)
+        axle_torque = self.drivetrain.wheel_torque_nm(clutch_torque, control.gear)
 
         torque_rl, torque_rr = self.differential.split_torque_nm(
             axle_torque, state.wheel_omega_rads["RL"], state.wheel_omega_rads["RR"]
@@ -206,6 +233,8 @@ class Vehicle:
         drive_torque = {"FL": 0.0, "FR": 0.0, "RL": torque_rl, "RR": torque_rr}
 
         brake_front, brake_rear = self.brakes.axle_torques_nm(control.brake)
+        # サイドブレーキは**後輪のみ**。後輪をロックさせて横力を消す
+        brake_rear += self.brakes.handbrake_axle_torque_nm(control.handbrake)
         brake_torque = {
             "FL": brake_front / 2.0, "FR": brake_front / 2.0,
             "RL": brake_rear / 2.0, "RR": brake_rear / 2.0,
@@ -228,9 +257,11 @@ class Vehicle:
                 fx_w -= math.copysign(self.crr * fz[wheel], vx_w)
 
             # 車輪の回転運動
+            # ロック中はエンジンと車輪が一体で回るので、エンジン慣性を
+            # 車輪軸へ換算して足す（1速では総比^2 = 約221倍になり支配的）。
+            # 滑っている間はエンジンが切り離されているので足さない。
             inertia = self.wheel_inertia_kgm2
-            if wheel in REAR_WHEELS and control.clutch_engaged:
-                # エンジン慣性を後輪2本で分担
+            if wheel in REAR_WHEELS and clutch_locked:
                 inertia += self.drivetrain.reflected_inertia_at_wheel_kgm2(control.gear) / 2.0
 
             brake = math.copysign(brake_torque[wheel], omega) if abs(omega) > 0.1 else 0.0
@@ -296,6 +327,7 @@ class Vehicle:
                              + state.vy_mps * math.cos(state.heading_rad)) * dt_s,
             heading_rad=state.heading_rad + state.yaw_rate_rads * dt_s,
             wheel_omega_rads=new_omega,
+            engine_omega_rads=engine_omega,
         )
 
         outputs.ax_mps2 = ax_mps2
@@ -303,15 +335,79 @@ class Vehicle:
         outputs.yaw_accel_rads2 = yaw_accel
         outputs.engine_rpm = engine_rpm
         outputs.engine_torque_nm = engine_torque
+        outputs.clutch_torque_nm = clutch_torque
+        outputs.clutch_slip_rads = engine_omega - gearbox_omega
         return new_state, outputs
+
+    # --- エンジンとクラッチの積分 -------------------------------------------
+
+    def _integrate_engine(self, engine_omega, gearbox_omega, control, dt_s, substeps=4):
+        """エンジン回転を dt 進め、(新回転, クラッチトルク, エンジントルク, ロック中か) を返す。
+
+        **ロック／スリップを切り替える。** これは車両シミュレーションの標準手法。
+
+          ロック中: クラッチは剛体。エンジン回転は変速機入力に拘束される。
+                    エンジンの慣性は駆動系を通じて車輪側に反映される。
+          スリップ中: エンジンは独立した状態を持ち、クラッチは容量ぶんだけ伝える。
+
+        剛なバネで両者を繋いだまま陽解法で解くと、エンジンと車輪が
+        2質量系として発振する（実際にクラッチトルクが毎ステップ ±容量で
+        振動した）。ロック時に拘束へ切り替えることでこれを避ける。
+        """
+        capacity = self.clutch.capacity_nm * control.clutch
+
+        # **完全に繋がっていればロック。** 実車のクラッチは容量が
+        # エンジン最大トルクの 1.3-1.8 倍あるので、繋がっていれば滑らない。
+        #
+        # 回転差でロック判定していたときは、時間刻みを 0.002 -> 0.004 に
+        # 変えるだけでラップが 55s -> 82s になった（刻みが粗いと回転差が
+        # 判定値を超えてスリップ扱いになるため）。踏み量で判定すれば
+        # 時間刻みに依存しない。
+        locked = control.clutch > 0.95
+
+        if locked:
+            # 拘束。エンジンは変速機入力と一体で回る
+            engine_omega = max(gearbox_omega, self.idle_omega_rads)
+            engine_torque = self.engine.torque_nm(engine_omega, control.throttle)
+            # エンジンが出したトルクはそのままクラッチを通る。
+            # 慣性による抵抗は、車輪側に反映した等価慣性が受け持つ。
+            clutch_torque = engine_torque
+            if abs(clutch_torque) > capacity:
+                clutch_torque = math.copysign(capacity, clutch_torque)
+            return engine_omega, clutch_torque, engine_torque, True
+
+        # --- 滑っている（切っている / 半クラッチ / 回転差が大きい）---
+        inertia = self.engine_inertia_kgm2
+        sub_dt = dt_s / substeps
+        clutch_torque = 0.0
+        engine_torque = 0.0
+        for _ in range(substeps):
+            engine_torque = self.engine.torque_nm(max(engine_omega, 0.0), control.throttle)
+            if capacity <= 0.0:
+                clutch_torque = 0.0          # 完全に切れている。空吹かし
+            else:
+                # **回転差に比例。容量で頭打ち。**
+                # 以前は常に容量いっぱいを掛けていたため、エンジンがわずかに
+                # 遅いだけで -310 N*m の制動が入り、車が極端に遅くなった。
+                stiffness = capacity / LOCK_TOLERANCE_RADS
+                clutch_torque = stiffness * (engine_omega - gearbox_omega)
+                clutch_torque = max(min(clutch_torque, capacity), -capacity)
+            engine_omega += (engine_torque - clutch_torque) / inertia * sub_dt
+            engine_omega = max(engine_omega, self.idle_omega_rads)
+
+        return engine_omega, clutch_torque, engine_torque, False
 
     # --- 補助 -------------------------------------------------------------
 
-    def initial_state(self, speed_mps: float = 0.0) -> VehicleState:
+    def initial_state(self, speed_mps: float = 0.0, gear: str = "1") -> VehicleState:
         omega = speed_mps / self.wheel_radius_m
+        engine_omega = max(
+            self.drivetrain.engine_omega_rads(omega, gear), self.idle_omega_rads
+        )
         return VehicleState(
             vx_mps=speed_mps,
             wheel_omega_rads={w: omega for w in WHEELS},
+            engine_omega_rads=engine_omega,
         )
 
     def gear_for_speed(self, speed_mps: float) -> str:
