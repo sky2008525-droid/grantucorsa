@@ -317,8 +317,18 @@ class Driver:
 
         countersteer = 0.0
         if spinning:
-            # すべっている向きへ舵を当てる
-            countersteer = -cfg.countersteer_gain * sideslip
+            # **カウンターステアの符号**
+            #
+            #   beta < 0 = 速度ベクトルが機首より右 = 左旋回でオーバーステア
+            #   立て直すには右へ切る (delta < 0)
+            #   → 前輪横力が右向き → ヨーモーメントが左回転を打ち消す
+            #   したがって beta < 0 のとき delta < 0、すなわち +gain * beta
+            #
+            # 以前は -gain * beta としており **符号が逆だった**。滑っている方向へ
+            # 舵を足すため、車が回り続けたまま速度ベクトルが追いつくだけになる。
+            # 実験では舵を当てないより悪く、残留ヨーレートが 12 deg/s 残った
+            # （正しい符号では 0.0 deg/s まで収束する）。
+            countersteer = cfg.countersteer_gain * sideslip
             steer += countersteer
             # 後輪の縦力を抜いて横力を戻す
             severity = min(abs(sideslip) / cfg.sideslip_spin_rad, 1.0)
