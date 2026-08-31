@@ -42,10 +42,13 @@
 *.mp3           binary
 *.ogg           binary
 *.exr           binary
-*.hdr           binary
+*.hdr filter=lfs diff=lfs merge=lfs -text
 *.tga           binary
 # ---------------------------------------------------------------
 # 差分の見え方
 # ---------------------------------------------------------------
 # vehicle.json は最重要データ。差分を読みやすくする
 Vehicles/**/*.json diff=json
+Tracks/Assets/**/*.png filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+Tracks/Assets/**/*.jpg filter=lfs diff=lfs merge=lfs -text

@@ -1,0 +1,113 @@
+{
+  "pine_sapling_small": {
+    "name": "Pine Sapling Small",
+    "authors": {
+      "Rob Tuytel": "photography",
+      "Rico Cilliers": "modeling"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/pine_sapling_small",
+    "resolution": "1k",
+    "polycount": 398144,
+    "gltf": "pine_sapling_small_1k.gltf",
+    "bytes": 21891339
+  },
+  "fir_sapling": {
+    "name": "Fir Sapling",
+    "authors": {
+      "Rob Tuytel": "photography",
+      "Rico Cilliers": "modeling"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/fir_sapling",
+    "resolution": "1k",
+    "polycount": 433021,
+    "gltf": "fir_sapling_1k.gltf",
+    "bytes": 25423602
+  },
+  "searsia_lucida": {
+    "name": "Searsia Lucida",
+    "authors": {
+      "James Ray Cock": "modeling",
+      "Jenelle van Heerden": "Photography"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/searsia_lucida",
+    "resolution": "1k",
+    "polycount": 841648,
+    "gltf": "searsia_lucida_1k.gltf",
+    "bytes": 19816833
+  },
+  "othonna_cerarioides": {
+    "name": "Othonna Cerarioides",
+    "authors": {
+      "James Ray Cock": "modeling",
+      "Jenelle van Heerden": "Photography"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/othonna_cerarioides",
+    "resolution": "1k",
+    "polycount": 651641,
+    "gltf": "othonna_cerarioides_1k.gltf",
+    "bytes": 7879771
+  },
+  "tree_stump_01": {
+    "name": "Tree Stump 01",
+    "authors": {
+      "Rob Tuytel": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/tree_stump_01",
+    "resolution": "1k",
+    "polycount": 41046,
+    "gltf": "tree_stump_01_1k.gltf",
+    "bytes": 3939674
+  },
+  "farm_field_puresky": {
+    "name": "Farm Field (Pure Sky)",
+    "authors": {
+      "Dimitrios Savva": "Photography",
+      "Jarod Guest": "Processing & Sky Edits"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/farm_field_puresky",
+    "kind": "hdris",
+    "resolution": "4k",
+    "file": "farm_field_puresky_4k.hdr",
+    "bytes": 18996174
+  },
+  "asphalt_pit_lane": {
+    "name": "Asphalt Pit Lane",
+    "authors": {
+      "Dimitrios Savva": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/asphalt_pit_lane",
+    "kind": "textures",
+    "resolution": "2k",
+    "maps": {
+      "Diffuse": "asphalt_pit_lane_diff_2k.jpg",
+      "nor_gl": "asphalt_pit_lane_nor_gl_2k.jpg",
+      "arm": "asphalt_pit_lane_arm_2k.jpg",
+      "Rough": "asphalt_pit_lane_rough_2k.jpg"
+    },
+    "bytes": 13208498
+  },
+  "aerial_grass_rock": {
+    "name": "Aerial Grass Rock",
+    "authors": {
+      "Rob Tuytel": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/aerial_grass_rock",
+    "kind": "textures",
+    "resolution": "2k",
+    "maps": {
+      "Diffuse": "aerial_grass_rock_diff_2k.jpg",
+      "nor_gl": "aerial_grass_rock_nor_gl_2k.jpg",
+      "arm": "aerial_grass_rock_arm_2k.jpg",
+      "Rough": "aerial_grass_rock_rough_2k.jpg"
+    },
+    "bytes": 8864805
+  }
+}
