@@ -1,5 +1,5 @@
 ---
-paths: ["Physics/**/*.py"]
+paths: ["Physics/**/*.py", "Tests/**/*.py"]
 ---
 
 # 物理モデルを書くときのルール
