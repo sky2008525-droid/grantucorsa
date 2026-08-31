@@ -40,7 +40,20 @@ RELIEF_WAVELENGTH_M = 140.0
 
 # 地面グリッドの解像度 [m] と、コース外周に取る余白 [m]
 GROUND_CELL_M = 4.0
-GROUND_MARGIN_M = 140.0
+GROUND_MARGIN_M = 420.0
+
+# **車が到達しうる範囲は完全に平ら**にする距離 [m]（コースの外接矩形から）。
+#
+# 以前は中心線から 12 m で起伏を立ち上げていた。**コースアウトすると
+# すぐ丘に乗り上げ、車が地面から浮いた場所を走る**（物理は z=0 の平面を
+# 走り続けるため）。実際にその状態になった。
+#
+# 物理が平面3自由度である以上、**車が行ける場所はすべて平面でなければ
+# ならない。** 起伏は遠景としてのみ置く。
+DRIVABLE_FLAT_MARGIN_M = 120.0
+
+# 起伏が立ち上がりきるまでの距離 [m]
+RELIEF_BLEND_M = 200.0
 
 # 地面を路面より何 m 下げるか。
 #
@@ -161,13 +174,29 @@ def build_ground(points, width_m, shoulder_m):
     ny = int((y1 - y0) / GROUND_CELL_M) + 1
     log("ground grid %d x %d (%.0f x %.0f m)", nx, ny, x1 - x0, y1 - y0)
 
-    # 中心線は 5 m 間隔まで間引く。判定したいのは「路面から十分離れているか」
-    # であって、1 m の精度は要らない。
-    samples = centreline_sampler(points, 5)
+    # **起伏の判定は中心線からの距離ではなく、コースの外接矩形からの距離。**
+    #
+    # 中心線基準だと、コースの内側（インフィールド）や折り返しの内側が
+    # 「中心線から遠い」と判定されて起伏が立つ。そこは車がコースアウトで
+    # 到達する場所であり、物理は平面を走り続けるので車が浮く。
+    track_x0, track_x1 = min(xs), max(xs)
+    track_y0, track_y1 = min(ys), max(ys)
 
-    flat_radius = width_m / 2.0 + shoulder_m
-    # 起伏が立ち上がりきるまでの距離。急に山にならないよう余裕を取る
-    blend_radius = flat_radius + 45.0
+    def relief_mask(x, y):
+        """コースの外接矩形からどれだけ外れているかで 0..1 を返す。"""
+        # **矩形距離（max）で測る。** hypot（円形）にすると、矩形で
+        # 検査している「走行しうる範囲」と角で食い違い、角だけ起伏が
+        # 立つ。実際に 0.24 m のずれとして検出された。
+        dx = max(track_x0 - x, 0.0, x - track_x1)
+        dy = max(track_y0 - y, 0.0, y - track_y1)
+        outside = max(dx, dy)
+
+        if outside <= DRIVABLE_FLAT_MARGIN_M:
+            return 0.0
+        if outside >= DRIVABLE_FLAT_MARGIN_M + RELIEF_BLEND_M:
+            return 1.0
+        t = (outside - DRIVABLE_FLAT_MARGIN_M) / RELIEF_BLEND_M
+        return t * t * (3.0 - 2.0 * t)     # smoothstep
 
     mesh = bpy.data.meshes.new("TrackGround")
     bm = bmesh.new()
@@ -179,15 +208,7 @@ def build_ground(points, width_m, shoulder_m):
         y = y0 + iy * GROUND_CELL_M
         for ix in range(nx):
             x = x0 + ix * GROUND_CELL_M
-            distance = distance_to_centreline(x, y, samples)
-
-            if distance <= flat_radius:
-                mask = 0.0
-            elif distance >= blend_radius:
-                mask = 1.0
-            else:
-                t = (distance - flat_radius) / (blend_radius - flat_radius)
-                mask = t * t * (3.0 - 2.0 * t)     # smoothstep
+            mask = relief_mask(x, y)
 
             if mask <= 0.0:
                 z = -GROUND_SINK_M
@@ -316,6 +337,29 @@ def main():
         log("!! 路面が平らでない (max |z| = %.6f)", max(abs(z) for z in road_z))
         return 1
     log("路面の平坦性 OK (max |z| = %.2e)", max(abs(z) for z in road_z))
+
+    # **車が到達しうる範囲の地面も平らかを確認する。**
+    #
+    # 物理は z=0 の平面を走り続けるので、走行しうる場所に起伏があると
+    # 車が地面から浮く／埋まる。以前これを見落として、コースアウトすると
+    # 丘の上を宙に浮いて走る状態になった。**目視ではなく数値で止める。**
+    xs_t = [p["x_m"] for p in points]
+    ys_t = [p["y_m"] for p in points]
+    tx0, tx1 = min(xs_t) - DRIVABLE_FLAT_MARGIN_M, max(xs_t) + DRIVABLE_FLAT_MARGIN_M
+    ty0, ty1 = min(ys_t) - DRIVABLE_FLAT_MARGIN_M, max(ys_t) + DRIVABLE_FLAT_MARGIN_M
+
+    worst = 0.0
+    checked = 0
+    for vert in ground.data.vertices:
+        x, y, z = vert.co
+        if tx0 <= x <= tx1 and ty0 <= y <= ty1:
+            checked += 1
+            worst = max(worst, abs(z + GROUND_SINK_M))
+
+    if worst > 1e-9:
+        log("!! 走行しうる範囲の地面が平らでない (max ずれ %.6f m)", worst)
+        return 1
+    log("走行域の地面の平坦性 OK (%d 頂点、max ずれ %.2e m)", checked, worst)
 
     species = ["pine_sapling_small", "fir_sapling", "searsia_lucida",
                "othonna_cerarioides", "tree_stump_01"]
