@@ -119,7 +119,12 @@ namespace ZN6
 	class FTire
 	{
 	public:
-		bool Init(FVehicleData& Data, double InNominalLoadN, FString& OutError);
+		/**
+		 * @param bReadCamber  キャンバーを使うときだけ true。
+		 *                     **常に読むと信頼度が不要に下がる**（assumed / 0.10）。
+		 */
+		bool Init(FVehicleData& Data, double InNominalLoadN, FString& OutError,
+		          bool bReadCamber = false);
 
 		/**
 		 * 垂直荷重に依存する摩擦係数。
@@ -144,7 +149,8 @@ namespace ZN6
 		 * スリップがパワーオーバーステアの発生条件そのもの。
 		 */
 		void ForcesN(double FzN, double SlipRatio, double SlipAngleRad,
-		             double& OutFxN, double& OutFyN) const;
+		             double& OutFxN, double& OutFyN,
+		             double CamberLeanRad = 0.0) const;
 
 		/**
 		 * その動作点での dFx/dkappa [N]（接線剛性）。
@@ -157,7 +163,8 @@ namespace ZN6
 		 * ときの実際の勾配はずっと小さく、使うと積分が過剰に減衰する。
 		 */
 		double LongitudinalSlopeNPerSlip(double FzN, double InSlipRatio,
-		                                 double InSlipAngleRad) const;
+		                                 double InSlipAngleRad,
+		                                 double CamberLeanRad = 0.0) const;
 
 		/** スリップ率 kappa = (omega*r - v) / max(|v|, 0.5)。駆動時は正。 */
 		static double SlipRatio(double WheelOmegaRads, double RadiusM, double ContactSpeedMps);
@@ -174,6 +181,15 @@ namespace ZN6
 		double LongitudinalStiffnessPerLoad = 0.0;
 		double EffectiveRadiusM = 0.0;
 		double NominalLoadN = 0.0;
+
+		/**
+		 * キャンバー推力の係数。**キャンバーを使うときだけ読む。**
+		 *
+		 * assumed / 0.10 なので、常に読むとキャンバー 0 の走行まで結果の
+		 * 信頼度が 0.10 に落ちる。効いていない値で信頼度を下げるのは
+		 * 依存関係の嘘になる。負なら「読んでいない」。
+		 */
+		double CamberStiffnessPerLoad = -1.0;
 	};
 
 	// -----------------------------------------------------------------------
@@ -213,6 +229,18 @@ namespace ZN6
 		 * 後輪だけをロックさせるため、後輪の横力が消えて車が回り始める。
 		 */
 		double HandbrakeAxleTorqueNm(double Lever) const;
+
+		/**
+		 * 前ブレーキの配分を差し替える（セッティング）。
+		 *
+		 * **範囲は FSetupLimits が保証する。** ここでは物理的にあり得ない
+		 * 値だけを弾く。
+		 */
+		void SetBiasFront(double Value)
+		{
+			BiasFront = FMath::Clamp(Value, 0.0, 1.0);
+		}
+		double GetBiasFront() const { return BiasFront; }
 
 	private:
 		double BiasFront = 0.0;

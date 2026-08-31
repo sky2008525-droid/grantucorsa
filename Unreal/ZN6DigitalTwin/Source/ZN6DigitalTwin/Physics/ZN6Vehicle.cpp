@@ -30,11 +30,18 @@ namespace ZN6
 		}
 	}
 
-	bool FVehicle::Init(FVehicleData& Data, bool bUseLsd, FString& OutError)
+	bool FVehicle::Init(FVehicleData& Data, bool bUseLsd, FString& OutError,
+	                    const FCarSetup& InSetup)
 	{
+		Setup = InSetup;
+
 		if (!Engine.Init(Data, OutError)) { return false; }
 		if (!Drivetrain.Init(Data, OutError)) { return false; }
 		if (!Brakes.Init(Data, OutError)) { return false; }
+		if (Setup.BrakeBias >= 0.0)
+		{
+			Brakes.SetBiasFront(Setup.BrakeBias);
+		}
 		if (!Clutch.Init(Data, OutError)) { return false; }
 		if (!Aero.Init(Data, OutError)) { return false; }
 		if (!Differential.Init(Data, bUseLsd, OutError)) { return false; }
@@ -44,7 +51,10 @@ namespace ZN6
 		if (!Data.GetValue(TEXT("dimensions.wheelbase"), TEXT("m"), WheelbaseM, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("dimensions.track_front"), TEXT("m"), TrackFrontM, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("dimensions.track_rear"), TEXT("m"), TrackRearM, OutError)) { return false; }
-		if (!Data.GetValue(TEXT("inertia.cg_height"), TEXT("m"), CgHeightM, OutError)) { return false; }
+		// 車高を下げれば重心も下がる。**基準値そのものは書き換えない。**
+		if (!Data.GetValue(TEXT("inertia.cg_height"), TEXT("m"),
+		                   CgHeightBaselineM, OutError)) { return false; }
+		CgHeightM = Setup.CgHeightM(CgHeightBaselineM);
 		if (!Data.GetValue(TEXT("inertia.cg_longitudinal_from_front_axle"), TEXT("m"), LfM, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("suspension.roll_stiffness_distribution_front"), TEXT("-"),
 		                   RollDistFront, OutError)) { return false; }
@@ -61,7 +71,11 @@ namespace ZN6
 		LrM = WheelbaseM - LfM;
 
 		const double WeightN = MassKg * GravityMps2;
-		if (!Tire.Init(Data, WeightN / 4.0, OutError)) { return false; }
+		// **キャンバーを使うときだけ係数を読む**（信頼度を不要に下げない）。
+		if (!Tire.Init(Data, WeightN / 4.0, OutError, Setup.UsesCamber()))
+		{
+			return false;
+		}
 		WheelRadiusM = Tire.GetEffectiveRadiusM();
 		StaticFrontN = WeightN * LrM / WheelbaseM;
 		StaticRearN = WeightN * LfM / WheelbaseM;
@@ -101,6 +115,13 @@ namespace ZN6
 		}
 	}
 
+	double FVehicle::WheelSteerRad(int32 WheelIndex, double SteerRad) const
+	{
+		// **後輪にも角度が付きうる**（後輪トー）。既定では 0 になる。
+		const double Base = IsFrontWheel(WheelIndex) ? SteerRad : 0.0;
+		return Base + Setup.WheelToeRad(WheelIndex);
+	}
+
 	void FVehicle::WheelVelocity(const FVehicleState& State, int32 WheelIndex, double SteerRad,
 	                             double& OutVxMps, double& OutVyMps) const
 	{
@@ -110,10 +131,13 @@ namespace ZN6
 		double Vx = State.VxMps - State.YawRateRads * Y;
 		double Vy = State.VyMps + State.YawRateRads * X;
 
-		if (IsFrontWheel(WheelIndex))
+		// **角度がちょうど 0 なら回さない。** 回転を通すと丸めで最下位ビットが
+		// 動きうる。既定のセッティングで以前と完全に一致させるための分岐。
+		const double Angle = WheelSteerRad(WheelIndex, SteerRad);
+		if (Angle != 0.0)
 		{
-			const double CosD = std::cos(SteerRad);
-			const double SinD = std::sin(SteerRad);
+			const double CosD = std::cos(Angle);
+			const double SinD = std::sin(Angle);
 			const double RotatedVx =  Vx * CosD + Vy * SinD;
 			const double RotatedVy = -Vx * SinD + Vy * CosD;
 			Vx = RotatedVx;
@@ -251,9 +275,6 @@ namespace ZN6
 		double ForceBodyY[WheelCount] = {};
 		double NewOmega[WheelCount] = {};
 
-		const double CosD = std::cos(Control.SteerRad);
-		const double SinD = std::sin(Control.SteerRad);
-
 		for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
 		{
 			double VxW = 0.0;
@@ -264,9 +285,11 @@ namespace ZN6
 			const double Kappa = FTire::SlipRatio(Omega, WheelRadiusM, VxW);
 			const double Alpha = FTire::SlipAngleRad(VyW, VxW);
 
+			const double CamberLean = Setup.WheelCamberLeanRad(Wheel);
+
 			double FxW = 0.0;
 			double FyW = 0.0;
-			Tire.ForcesN(Fz[Wheel], Kappa, Alpha, FxW, FyW);
+			Tire.ForcesN(Fz[Wheel], Kappa, Alpha, FxW, FyW, CamberLean);
 
 			// 転がり抵抗（進行方向と逆）
 			if (FMath::Abs(VxW) > 0.1)
@@ -306,7 +329,8 @@ namespace ZN6
 			//
 			// **定常解は陽解法と同じ。** 分母は増分に掛かるだけで、
 			// 増分がゼロになる条件（T = r*fx）を変えない。
-			const double DFxDKappa = Tire.LongitudinalSlopeNPerSlip(Fz[Wheel], Kappa, Alpha);
+			const double DFxDKappa =
+				Tire.LongitudinalSlopeNPerSlip(Fz[Wheel], Kappa, Alpha, CamberLean);
 			const double DFxDOmega = DFxDKappa * WheelRadiusM / FMath::Max(FMath::Abs(VxW), 0.5);
 			const double Damping = 1.0 + DtS * WheelRadiusM * DFxDOmega / Inertia;
 			double OmegaNew = Omega + OmegaDot * DtS / Damping;
@@ -318,9 +342,13 @@ namespace ZN6
 			}
 			NewOmega[Wheel] = OmegaNew;
 
-			// 車輪座標系 -> 車体座標系
-			if (IsFrontWheel(Wheel))
+			// 車輪座標系 -> 車体座標系。**速度を回したのと同じ角度で戻す。**
+			// 別の角度を使うと、力と速度の向きが食い違って仕事が合わなくなる。
+			const double Angle = WheelSteerRad(Wheel, Control.SteerRad);
+			if (Angle != 0.0)
 			{
+				const double CosD = std::cos(Angle);
+				const double SinD = std::sin(Angle);
 				ForceBodyX[Wheel] = FxW * CosD - FyW * SinD;
 				ForceBodyY[Wheel] = FxW * SinD + FyW * CosD;
 			}

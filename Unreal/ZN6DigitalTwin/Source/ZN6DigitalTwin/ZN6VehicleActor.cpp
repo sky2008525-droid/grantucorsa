@@ -8,7 +8,10 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Engine/GameViewportClient.h"
 #include "Physics/ZN6Units.h"
+#include "UI/SZN6Hud.h"
+#include "Widgets/SWeakWidget.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
@@ -166,6 +169,108 @@ void AZN6VehicleActor::BeginPlay()
 	// **最後に、今いる地面の上で釣り合わせる。**
 	// 地形を読んだ後でないと、平地の姿勢のまま坂に置かれて跳ねる。
 	SettleRide();
+
+	CreateHud();
+}
+
+void AZN6VehicleActor::EndPlay(const EEndPlayReason::Type Reason)
+{
+	// **片付ける。** 残すと、PIE を止めた後もビューポートに計器が出たままになる。
+	DestroyHud();
+	Super::EndPlay(Reason);
+}
+
+void AZN6VehicleActor::CreateHud()
+{
+	if (Hud.IsValid() || GEngine == nullptr || GEngine->GameViewport == nullptr)
+	{
+		return;
+	}
+
+	Hud = SNew(SZN6Hud);
+
+	// ミニマップの中心線は**1回だけ**渡す。毎フレーム渡すと千点の配列を
+	// 毎回コピーすることになる。
+	if (bTrackEdgeLoaded)
+	{
+		TArray<FVector2D> Points;
+		const int32 Count = TrackEdge.CentrelineCount();
+		// 全点は要らない。**間引いて渡す。** 1 m 間隔の千点を線で結んでも
+		// 210px の枠では違いが出ない。
+		const int32 Stride = FMath::Max(Count / 240, 1);
+		Points.Reserve(Count / Stride + 1);
+		for (int32 Index = 0; Index < Count; Index += Stride)
+		{
+			double XM = 0.0;
+			double YM = 0.0;
+			TrackEdge.CentrelinePoint(Index, XM, YM);
+			Points.Add(FVector2D(XM, YM));
+		}
+		Hud->SetCentreline(MoveTemp(Points));
+	}
+
+	GEngine->GameViewport->AddViewportWidgetContent(
+		SNew(SWeakWidget).PossiblyNullContent(Hud.ToSharedRef()), /*ZOrder=*/10);
+}
+
+void AZN6VehicleActor::DestroyHud()
+{
+	if (Hud.IsValid() && GEngine != nullptr && GEngine->GameViewport != nullptr)
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(Hud.ToSharedRef());
+	}
+	Hud.Reset();
+}
+
+ZN6::FHudSnapshot AZN6VehicleActor::MakeHudSnapshot() const
+{
+	ZN6::FHudSnapshot Snapshot;
+
+	Snapshot.SpeedKmh = PhysicsState.SpeedMps() * ZN6::KmhPerMps;
+	Snapshot.EngineRpm = ZN6::RadsToRpm(PhysicsState.EngineOmegaRads);
+	Snapshot.Gear = Control.GearIndex + 1;
+	Snapshot.Throttle = Control.Throttle;
+	Snapshot.Brake = Control.Brake;
+	Snapshot.ClutchEngagement = Control.Clutch;
+	Snapshot.Handbrake = Control.Handbrake;
+	Snapshot.SteerRad = Control.SteerRad;
+	Snapshot.MaxSteerRad = MaxSteerRad;
+
+	for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+	{
+		Snapshot.Utilisation[Wheel] = PhysicsOutputs.Utilisation[Wheel];
+		// 接地の有無は**接地モデルから**。無いときは接地しているものとして扱う
+		// （地面に置いているだけの状態では「浮く」が存在しない）。
+		Snapshot.bContact[Wheel] = IsUsingRideModel()
+			? RideOutputs.bContact[Wheel] : true;
+	}
+
+	Snapshot.SlipAngleDeg = FMath::RadiansToDegrees(PhysicsState.SideslipRad());
+	Snapshot.LateralG = PhysicsOutputs.AyMps2 / ZN6::GravityMps2;
+	Snapshot.LongitudinalG = PhysicsOutputs.AxMps2 / ZN6::GravityMps2;
+
+	Snapshot.Phase = Race.Phase();
+	Snapshot.CountdownNumber = Race.CountdownNumber();
+	Snapshot.CountdownRemainingS = Race.CountdownRemainingS();
+	Snapshot.CurrentLap = Race.CurrentLap();
+	Snapshot.LapTimeS = Race.CurrentLapTimeS();
+	Snapshot.BestLapS = Race.BestLapS();
+	Snapshot.SessionTimeS = Race.SessionTimeS();
+	Snapshot.Sector = Race.CurrentSector();
+	Snapshot.bOffTrack = Race.IsOffTrack();
+	Snapshot.bLapInvalidated = Race.CurrentLapInvalidated();
+	Snapshot.LapProgress = Race.LapProgress();
+	Snapshot.Laps = Race.Laps();
+
+	Snapshot.CarXM = PhysicsState.XM;
+	Snapshot.CarYM = PhysicsState.YM;
+	Snapshot.CarHeadingRad = PhysicsState.HeadingRad;
+
+	// **信頼度も画面へ。** 出典のある値と仮定値を同じ顔で並べない。
+	Snapshot.Confidence = Vehicle.GetConfidence();
+	Snapshot.bValidatable = Vehicle.IsValidatable();
+
+	return Snapshot;
 }
 
 bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString& OutError)
@@ -718,6 +823,12 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 		Audio->UpdateAudio(PhysicsOutputs.EngineRpm, Control.Throttle, Worst,
 		                   PhysicsState.SpeedMps(), GetDistanceToTrackEdgeM(),
 		                   SimulatedTimeS);
+	}
+
+	// **画面は物理の後。** 表示のために物理を先読みしない。
+	if (Hud.IsValid())
+	{
+		Hud->SetSnapshot(MakeHudSnapshot());
 	}
 
 	if (bShowTelemetry)

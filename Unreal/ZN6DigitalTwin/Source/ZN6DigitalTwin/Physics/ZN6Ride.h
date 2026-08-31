@@ -18,6 +18,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "ZN6Setup.h"
 #include "ZN6Vehicle.h"
 #include "ZN6VehicleData.h"
 
@@ -53,7 +54,8 @@ namespace ZN6
 	class FRideModel
 	{
 	public:
-		bool Init(FVehicleData& Data, FString& OutError);
+		bool Init(FVehicleData& Data, FString& OutError,
+		          const FCarSetup& InSetup = FCarSetup());
 		bool IsValid() const { return bReady; }
 
 		/**
@@ -96,6 +98,7 @@ namespace ZN6
 		                  double OutHeightM[WheelCount]) const;
 
 		bool bReady = false;
+		FCarSetup Setup;
 
 		double Mass = 0.0;
 		double CgHeightM = 0.0;

@@ -21,9 +21,11 @@ namespace ZN6
 		}
 	}
 
-	bool FRideModel::Init(FVehicleData& Data, FString& OutError)
+	bool FRideModel::Init(FVehicleData& Data, FString& OutError,
+	                      const FCarSetup& InSetup)
 	{
 		bReady = false;
+		Setup = InSetup;
 
 		double LfM = 0.0;
 		double TyreK = 0.0;
@@ -32,6 +34,7 @@ namespace ZN6
 		const FEntry Entries[] = {
 			{ TEXT("mass.curb_mass"),                            TEXT("kg"),      &Mass },
 			{ TEXT("inertia.cg_height"),                         TEXT("m"),       &CgHeightM },
+			// **車高を下げれば重心も下がる。** 読んだ後で足す（下を参照）。
 			{ TEXT("inertia.Ixx"),                               TEXT("kg*m^2"),  &IxxKgm2 },
 			{ TEXT("inertia.Iyy"),                               TEXT("kg*m^2"),  &IyyKgm2 },
 			{ TEXT("dimensions.wheelbase"),                      TEXT("m"),       &WheelbaseM },
@@ -47,6 +50,9 @@ namespace ZN6
 				return false;
 			}
 		}
+
+		// 車高を下げれば重心も下がる。**基準値そのものは書き換えない。**
+		CgHeightM = Setup.CgHeightM(CgHeightM);
 
 		const double LrM = WheelbaseM - LfM;
 
@@ -86,6 +92,11 @@ namespace ZN6
 			{
 				return false;
 			}
+
+			// セッティングの倍率。**vehicle.json の min/max を倍率に直した
+			// ものなので、範囲を超えない**（FSetupLimits が保証する）。
+			SpringN *= bFront ? Setup.SpringScaleFront : Setup.SpringScaleRear;
+			Zeta *= bFront ? Setup.DampingScaleFront : Setup.DampingScaleRear;
 
 			// **モーションレシオは2乗で効く。** 1乗にすると力が合わない。
 			WheelRate[Wheel] = SpringN * Ratio * Ratio;

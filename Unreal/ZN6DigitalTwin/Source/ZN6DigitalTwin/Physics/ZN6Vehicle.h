@@ -34,6 +34,7 @@
 
 #include "CoreMinimal.h"
 #include "ZN6Components.h"
+#include "ZN6Setup.h"
 #include "ZN6VehicleData.h"
 
 // **数学関数は FMath ではなく標準ライブラリを使う。** 理由は
@@ -113,7 +114,20 @@ namespace ZN6
 	class FVehicle
 	{
 	public:
-		bool Init(FVehicleData& Data, bool bUseLsd, FString& OutError);
+		/**
+		 * @param InSetup  セッティング。**既定は「何も変えない」**で、
+		 *                 そのときの結果はセッティング機能を入れる前と
+		 *                 ビット単位で一致する。
+		 */
+		bool Init(FVehicleData& Data, bool bUseLsd, FString& OutError,
+		          const FCarSetup& InSetup = FCarSetup());
+
+		/** その車輪が向いている角度 [rad]。操舵にトーを足したもの。 */
+		double WheelSteerRad(int32 WheelIndex, double SteerRad) const;
+
+		const FCarSetup& GetSetup() const { return Setup; }
+		/** 車高を変える前の重心高 [m]。**基準値は書き換えない。** */
+		double GetCgHeightBaselineM() const { return CgHeightBaselineM; }
 
 		/**
 		 * 状態を Dt 進め、新しい状態と内部量を返す。
@@ -177,6 +191,9 @@ namespace ZN6
 		FAerodynamics Aero;
 		FDifferential Differential;
 		FTire Tire;
+
+		FCarSetup Setup;
+		double CgHeightBaselineM = 0.0;
 
 		double MassKg = 0.0;
 		double IzzKgm2 = 0.0;

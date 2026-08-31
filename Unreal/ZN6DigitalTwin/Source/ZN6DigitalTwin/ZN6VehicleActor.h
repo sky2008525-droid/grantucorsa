@@ -18,6 +18,7 @@
 #include "GameFramework/Pawn.h"
 #include "Audio/ZN6VehicleAudioComponent.h"
 #include "Game/ZN6RaceDirector.h"
+#include "UI/ZN6HudSnapshot.h"
 #include "Physics/ZN6Obstacles.h"
 #include "Physics/ZN6Ride.h"
 #include "Physics/ZN6Track.h"
@@ -182,6 +183,7 @@ public:
 	AZN6VehicleActor();
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
@@ -265,6 +267,9 @@ public:
 	void ReturnToMenu();
 
 	const ZN6::FRaceDirector& GetRace() const { return Race; }
+
+	/** 画面へ渡す値を作る。**一方向。UI からは書き戻さない。** */
+	ZN6::FHudSnapshot MakeHudSnapshot() const;
 
 	/** 車体が乗っている地面の高さ [m]（4輪の接地点の平均）。 */
 	double GetGroundHeightM() const { return GroundHeightM; }
@@ -490,6 +495,13 @@ private:
 
 	/** セッションの進行役。**物理には触らない。** */
 	ZN6::FRaceDirector Race;
+
+	/** 走行中の画面。**入力は奪わない**（HitTestInvisible）。 */
+	TSharedPtr<class SZN6Hud> Hud;
+
+	/** 画面をビューポートへ出す / 片付ける。 */
+	void CreateHud();
+	void DestroyHud();
 
 	/**
 	 * 音。**物理の後に更新する。**
