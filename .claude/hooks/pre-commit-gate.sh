@@ -53,10 +53,20 @@ echo " pre-commit gate"
 echo "=============================================="
 
 # ---------------------------------------------------------------------------
-# 1) 車両データ（Vehicles/**/*.json）
+# 1) 車両データ（Vehicles/**/vehicle.json）
 # ---------------------------------------------------------------------------
-
-STAGED_JSON=$(git diff --cached --name-only --diff-filter=ACM -- 'Vehicles/*.json' 'Vehicles/**/*.json')
+#
+# **対象は車両仕様ファイルだけ。** 以前は Vehicles/**/*.json を全て検証して
+# いたが、Phase 9 で Vehicles/ZN6/Clean/recon.json（3Dモデルの実測レポート）を
+# 追加したところ、車両スキーマ違反として弾かれた。
+#
+# validate_vehicle.py は vehicle.json 専用のスキーマ検証器であり
+# （Tools/validate_vehicle.py の docstring）、Raw/ Clean/ PBR/ Export/ に
+# 今後置かれる派生データを車両仕様として検証するのは誤り。
+#
+# **これは層1を緩める変更ではない。** 車両仕様ファイルは引き続き
+# 全て検証される。対象をこのゲートの意図に一致させただけ。
+STAGED_JSON=$(git diff --cached --name-only --diff-filter=ACM -- 'Vehicles/vehicle.json' 'Vehicles/**/vehicle.json')
 
 if [ -z "$STAGED_JSON" ]; then
     echo

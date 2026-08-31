@@ -64,6 +64,22 @@ Unreal/**/.vs/
 Unreal/**/*.target
 Unreal/**/*.modules
 
+# UE へ取り込んだアセット（Content/ZN6）は**派生物**なので置かない。
+#
+#   Unreal/ZN6DigitalTwin/Scripts/import_assets.py   取り込み
+#   Unreal/ZN6DigitalTwin/Scripts/build_level.py     レベル構築
+#
+# の2つで、下記の一次データから完全に再生成できる:
+#
+#   Vehicles/ZN6/Export/     Blender が分解した車体（glb + manifest）
+#   Tracks/Export/           路面・地面メッシュと樹木の配置
+#   Tracks/Assets/polyhaven/ PolyHaven の CC0 アセット（md5 検証済み）
+#
+# 一次データは 115 MB。取り込み後の uasset は 129 MB あり、両方を持つと
+# **同じ情報を二重に抱えたうえ、どちらが正本か分からなくなる。**
+# 参照値 JSON を Python 実装から生成しているのと同じ理由。
+Unreal/**/Content/ZN6/
+
 # ---------------------------------------------------------------
 # Blender   （Phase 11 まで未導入 / bpy をモジュールとして使う方針）
 # ---------------------------------------------------------------

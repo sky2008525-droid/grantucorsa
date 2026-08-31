@@ -14,6 +14,7 @@
 #include "Engine/World.h"
 #include "HAL/PlatformTime.h"
 
+#include "Physics/ZN6Units.h"
 #include "ZN6VehicleActor.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -339,6 +340,278 @@ bool FZN6NoSpiralOfDeath::RunTest(const FString& Parameters)
 		*FString::Printf(TEXT("捨てた時間を記録している（%.3f s）"),
 		                 Actor->GetAccumulator().DroppedS),
 		Actor->GetAccumulator().DroppedS > 0.0);
+
+	DestroyWorld(World);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// 描画用の車輪が物理と対応していること
+// ---------------------------------------------------------------------------
+//
+// 車輪を分解して描画するようにしたので、**添字の取り違えと符号の誤りを
+// 検出する**。左に曲がっているのに右の車輪が切れる、加速しているのに
+// 車輪が逆回転する、といった壊れ方はコンパイルを通ってしまう。
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6VisualWheelsFollowPhysics,
+	"ZN6.Tick.描画の車輪が物理に追従する",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6VisualWheelsFollowPhysics::RunTest(const FString& Parameters)
+{
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	const FString ManifestPath =
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("../..")) /
+		TEXT("Vehicles/ZN6/Export/manifest.json");
+
+	FString Error;
+	if (!Actor->LoadVisualManifest(ManifestPath, Error))
+	{
+		AddError(FString::Printf(TEXT("manifest を読めない: %s"), *Error));
+		DestroyWorld(World);
+		return false;
+	}
+
+	// --- 取り付け位置が車として成立しているか ---
+	//
+	// **具体的な数値をここに書かない。** モデルを差し替えたら変わる。
+	// 「前輪が後輪より前」「左右が対称」という**関係**だけを検査する。
+	const FVector FL = Actor->GetWheelAttachM(static_cast<int32>(ZN6::EWheel::FL));
+	const FVector FR = Actor->GetWheelAttachM(static_cast<int32>(ZN6::EWheel::FR));
+	const FVector RL = Actor->GetWheelAttachM(static_cast<int32>(ZN6::EWheel::RL));
+	const FVector RR = Actor->GetWheelAttachM(static_cast<int32>(ZN6::EWheel::RR));
+
+	TestTrue(FString::Printf(TEXT("前輪が後輪より前にある（%.3f > %.3f）"), FL.X, RL.X),
+	         FL.X > RL.X);
+	TestTrue(FString::Printf(TEXT("FL が左（Y>0）にある（%.3f）"), FL.Y), FL.Y > 0.0);
+	TestTrue(FString::Printf(TEXT("FR が右（Y<0）にある（%.3f）"), FR.Y), FR.Y < 0.0);
+	TestTrue(FString::Printf(TEXT("RL が左（Y>0）にある（%.3f）"), RL.Y), RL.Y > 0.0);
+	TestTrue(FString::Printf(TEXT("RR が右（Y<0）にある（%.3f）"), RR.Y), RR.Y < 0.0);
+	TestTrue(FString::Printf(TEXT("前輪の左右が対称（%.4f vs %.4f）"), FL.Y, -FR.Y),
+	         FMath::Abs(FL.Y + FR.Y) < 0.02);
+
+	// 車輪の中心高さ = 転がり半径。**ここがずれると車が浮く／埋まる。**
+	TestTrue(FString::Printf(TEXT("車輪中心が接地半径の高さにある（%.4f m）"), FL.Z),
+	         FL.Z > 0.25 && FL.Z < 0.40);
+
+	// --- 前進すると車輪が前転する ---
+	Actor->SetPhysicsState(Actor->MakeInitialState(60.0 / 3.6, 2));
+	Actor->SetControl(MakeCorneringControl());
+
+	for (int32 Frame = 0; Frame < 30; ++Frame)
+	{
+		Actor->AdvancePhysics(1.0 / 60.0);
+	}
+
+	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+	{
+		TestTrue(
+			*FString::Printf(TEXT("%s の車輪速度が正（%.3f rad/s）"),
+			                 ZN6::WheelNames[Index],
+			                 Actor->GetPhysicsState().WheelOmegaRads[Index]),
+			Actor->GetPhysicsState().WheelOmegaRads[Index] > 0.0);
+
+		// **角度は角速度の積分。** 符号が食い違っていれば逆回転して見える。
+		TestTrue(
+			*FString::Printf(TEXT("%s の描画角が正（%.3f rad）"),
+			                 ZN6::WheelNames[Index],
+			                 Actor->GetVisualWheelAngleRad(Index)),
+			Actor->GetVisualWheelAngleRad(Index) > 0.0);
+	}
+
+	// --- 描画角を進めても物理は変わらない ---
+	//
+	// **憲法ルール4の検査。** 描画専用の状態が物理へ漏れていないこと。
+	const ZN6::FVehicleState Before = Actor->GetPhysicsState();
+	Actor->SyncVisualToPhysics();
+	const ZN6::FVehicleState After = Actor->GetPhysicsState();
+
+	TestEqual(TEXT("描画同期で vx が変わらない"), After.VxMps, Before.VxMps);
+	TestEqual(TEXT("描画同期で vy が変わらない"), After.VyMps, Before.VyMps);
+	TestEqual(TEXT("描画同期でヨーレートが変わらない"), After.YawRateRads, Before.YawRateRads);
+
+	DestroyWorld(World);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// 運転操作の層
+// ---------------------------------------------------------------------------
+//
+// キーボード入力を物理の入力へ変換する部分。**壊れても走れてしまう**ので
+// 気づきにくい: 変速で範囲外のギアが入る、舵角が一瞬で最大になる、
+// 最大舵角が実車と無関係な値になる、など。
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6DriverInputIsSane,
+	"ZN6.Tick.運転操作が物理の入力として妥当",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6DriverInputIsSane::RunTest(const FString& Parameters)
+{
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	// --- 最大舵角が実車の値から導かれているか ---
+	//
+	// **具体的な数値を期待値に書かない。** vehicle.json を直せば変わる。
+	// 「最小回転半径とホイールベースから導いた値と一致する」ことを見る。
+	const double MaxSteerRad = Actor->GetMaxSteerRad();
+	const double Expected = FMath::Atan2(2.570, 5.400);   // wheelbase / min_turning_radius
+	TestTrue(
+		*FString::Printf(TEXT("最大舵角 %.4f rad (%.1f deg) が最小回転半径から導かれている"),
+		                 MaxSteerRad, FMath::RadiansToDegrees(MaxSteerRad)),
+		FMath::Abs(MaxSteerRad - Expected) < 1e-6);
+
+	// **0 のままなら操舵が効かない。** 読み込み失敗を検出する。
+	TestTrue(TEXT("最大舵角がゼロでない"), MaxSteerRad > 0.1);
+
+	// --- 変速が範囲を外れないか ---
+	//
+	// 範囲外のギアは FDrivetrain::TotalRatio の check で落ちる。
+	// **落ちる前に止めること。**
+	Actor->SetPhysicsState(Actor->MakeInitialState(60.0 / 3.6, 2));
+	for (int32 Count = 0; Count < 20; ++Count)
+	{
+		Actor->ShiftUpForTest();
+	}
+	TestEqual(TEXT("上限を超えて変速しない"),
+	          Actor->GetControl().GearIndex, ZN6::ForwardGearCount - 1);
+
+	for (int32 Count = 0; Count < 20; ++Count)
+	{
+		Actor->ShiftDownForTest();
+	}
+	TestEqual(TEXT("下限を下回って変速しない"), Actor->GetControl().GearIndex, 0);
+
+	// --- 舵角が一瞬で最大にならないか ---
+	//
+	// キーボードは 0/1 しか出せない。生で渡すと FR では即スピンする。
+	Actor->SetPhysicsState(Actor->MakeInitialState(80.0 / 3.6, 3));
+	Actor->SetSteerInputForTest(1.0f);
+
+	Actor->ApplyDriverInputForTest(1.0f / 60.0f);
+	const double AfterOneFrame = FMath::Abs(Actor->GetControl().SteerRad);
+	TestTrue(
+		*FString::Printf(TEXT("1フレームで最大舵角へ飛ばない（%.4f rad）"), AfterOneFrame),
+		AfterOneFrame < MaxSteerRad * 0.5);
+
+	// 押し続ければいずれ上限に達し、**上限を超えない**
+	for (int32 Frame = 0; Frame < 240; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(1.0f / 60.0f);
+	}
+	const double Settled = FMath::Abs(Actor->GetControl().SteerRad);
+	TestTrue(
+		*FString::Printf(TEXT("押し続けると舵が入る（%.4f rad）"), Settled),
+		Settled > 0.02);
+	TestTrue(
+		*FString::Printf(TEXT("最大舵角を超えない（%.4f <= %.4f）"), Settled, MaxSteerRad),
+		Settled <= MaxSteerRad + 1e-9);
+
+	// --- 離すと中立へ戻るか ---
+	Actor->SetSteerInputForTest(0.0f);
+	for (int32 Frame = 0; Frame < 240; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(1.0f / 60.0f);
+	}
+	TestTrue(
+		*FString::Printf(TEXT("離すと中立へ戻る（%.5f rad）"),
+		                 Actor->GetControl().SteerRad),
+		FMath::Abs(Actor->GetControl().SteerRad) < 1e-6);
+
+	DestroyWorld(World);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// アクセルを踏んだら実際に走り出すか
+// ---------------------------------------------------------------------------
+//
+// **「操作が物理の入力に変換される」ことと「車が走る」ことは別。**
+// 変換が正しくても、ギアやクラッチの初期値、発進時の数値不安定（issue #24）
+// で動かないことがありうる。人がキーを押さないと分からない状態にしない。
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6CarActuallyDrives,
+	"ZN6.Tick.アクセルを踏むと発進する",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6CarActuallyDrives::RunTest(const FString& Parameters)
+{
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	// 実際の起動時と同じ状態から始める。**停止・1速・クラッチは繋がったまま。**
+	Actor->ResetToStart();
+
+	const double StartX = Actor->GetPhysicsState().XM;
+	constexpr float FrameDt = 1.0f / 60.0f;
+
+	// --- 全開で 5 秒 ---
+	Actor->SetThrottleInputForTest(1.0f);
+	for (int32 Frame = 0; Frame < 300; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(FrameDt);
+		Actor->AdvancePhysics(FrameDt);
+	}
+
+	const ZN6::FVehicleState& Moving = Actor->GetPhysicsState();
+	const double Travelled = Moving.XM - StartX;
+	const double SpeedKmh = Moving.SpeedMps() * ZN6::KmhPerMps;
+
+	// **しきい値は緩くてよい。** ここで見たいのは「動くか」であって
+	// 加速性能ではない（それは ZN6.Physics の 0-100km/h が見ている）。
+	TestTrue(
+		*FString::Printf(TEXT("5秒の全開で前進する（%.1f m）"), Travelled),
+		Travelled > 5.0);
+	TestTrue(
+		*FString::Printf(TEXT("速度が乗る（%.1f km/h）"), SpeedKmh),
+		Moving.SpeedMps() > 5.0);
+
+	// 前進していること。**後退していたらギアか符号が逆。**
+	TestTrue(
+		*FString::Printf(TEXT("前向きに進む（vx = %.2f m/s）"), Moving.VxMps),
+		Moving.VxMps > 0.0);
+
+	AddInfo(FString::Printf(
+		TEXT("5秒全開: %.1f m 進み %.1f km/h（%d速、エンジン %.0f rpm）"),
+		Travelled, SpeedKmh, Actor->GetControl().GearIndex + 1,
+		ZN6::RadsToRpm(Moving.EngineOmegaRads)));
+
+	// --- ブレーキで減速するか ---
+	const double BeforeBrakeMps = Moving.SpeedMps();
+	Actor->SetThrottleInputForTest(0.0f);
+	Actor->SetBrakeInputForTest(1.0f);
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(FrameDt);
+		Actor->AdvancePhysics(FrameDt);
+	}
+
+	const double AfterBrakeMps = Actor->GetPhysicsState().SpeedMps();
+	TestTrue(
+		*FString::Printf(TEXT("ブレーキで減速する（%.1f -> %.1f m/s）"),
+		                 BeforeBrakeMps, AfterBrakeMps),
+		AfterBrakeMps < BeforeBrakeMps);
 
 	DestroyWorld(World);
 	return true;

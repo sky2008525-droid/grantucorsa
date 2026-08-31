@@ -1,7 +1,16 @@
 #include "ZN6VehicleActor.h"
 
+#include "Camera/CameraComponent.h"
+#include "Components/InputComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Dom/JsonObject.h"
+#include "Engine/Engine.h"
+#include "GameFramework/SpringArmComponent.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Physics/ZN6Units.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 int32 FZN6FixedStepAccumulator::Consume(double FrameDeltaS)
 {
@@ -43,15 +52,52 @@ AZN6VehicleActor::AZN6VehicleActor()
 	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
 
-	VisualMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("VisualMesh"));
-	VisualMesh->SetupAttachment(Root);
-
 	// **描画メッシュのコリジョンを切る。** UE の物理エンジンがこのメッシュに
 	// 干渉すると、憲法ルール4（物理計算と表示用3Dモデルの完全分離）が壊れる。
 	// 物理は Physics/ZN6Vehicle だけが担当する。
-	VisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	VisualMesh->SetSimulatePhysics(false);
-	VisualMesh->SetGenerateOverlapEvents(false);
+	auto MakeVisualMesh = [this, Root](const TCHAR* Name) -> UStaticMeshComponent*
+	{
+		UStaticMeshComponent* Mesh = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+		Mesh->SetupAttachment(Root);
+		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Mesh->SetSimulatePhysics(false);
+		Mesh->SetGenerateOverlapEvents(false);
+		return Mesh;
+	};
+
+	BodyMesh = MakeVisualMesh(TEXT("BodyMesh"));
+
+	// **ZN6::EWheel と同じ順序で作ること。** 添字がそのまま物理の車輪番号。
+	static const TCHAR* const WheelComponentNames[ZN6::WheelCount] = {
+		TEXT("WheelFL"), TEXT("WheelFR"), TEXT("WheelRL"), TEXT("WheelRR")
+	};
+	WheelMeshes.Reserve(ZN6::WheelCount);
+	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+	{
+		WheelMeshes.Add(MakeVisualMesh(WheelComponentNames[Index]));
+	}
+
+	// --- 追従カメラ。**描画専用。** ---------------------------------------
+	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
+	CameraBoom->SetupAttachment(Root);
+	CameraBoom->TargetArmLength = 750.0f;
+	CameraBoom->SocketOffset = FVector(0.0f, 0.0f, 220.0f);
+	CameraBoom->bDoCollisionTest = false;   // 木や地面にカメラを寄せない
+	// **車体の回転に少し遅れて追従させる。** 完全追従だと、スピン時に
+	// world が回って見えて何が起きているか分からない。
+	CameraBoom->bEnableCameraRotationLag = true;
+	CameraBoom->CameraRotationLagSpeed = 6.0f;
+	CameraBoom->bInheritPitch = false;
+	CameraBoom->bInheritRoll = false;
+
+	ChaseCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("ChaseCamera"));
+	ChaseCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+
+	// この Pawn は UE の移動コンポーネントを持たない。
+	// **位置は物理モデルだけが決める。**
+	bUseControllerRotationYaw = false;
+	bUseControllerRotationPitch = false;
+	bUseControllerRotationRoll = false;
 }
 
 void AZN6VehicleActor::BeginPlay()
@@ -65,14 +111,21 @@ void AZN6VehicleActor::BeginPlay()
 
 	// vehicle.json はリポジトリ側にある（<repo>/Vehicles/ZN6/vehicle.json）。
 	// プロジェクトは <repo>/Unreal/ZN6DigitalTwin/ に置いてある。
-	const FString JsonPath = FPaths::ConvertRelativePathToFull(
-		FPaths::ProjectDir() / TEXT("../..")) / TEXT("Vehicles/ZN6/vehicle.json");
+	const FString RepoRoot = FPaths::ConvertRelativePathToFull(
+		FPaths::ProjectDir() / TEXT("../.."));
 
 	FString Error;
-	if (!InitialisePhysics(JsonPath, Error))
+	if (!InitialisePhysics(RepoRoot / TEXT("Vehicles/ZN6/vehicle.json"), Error))
 	{
 		// **握りつぶさない。** 値が無いならこのモデルは動かせない、が正しい状態。
 		UE_LOG(LogTemp, Error, TEXT("ZN6: 物理モデルを初期化できない: %s"), *Error);
+	}
+
+	// 車輪の取り付け位置。**読めなくても物理は動く**ので、ここは警告に留める
+	// （車輪が原点に重なって描画されるが、物理の正しさには影響しない）。
+	if (!LoadVisualManifest(RepoRoot / TEXT("Vehicles/ZN6/Export/manifest.json"), Error))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ZN6: 車輪の取り付け位置を読めない: %s"), *Error);
 	}
 }
 
@@ -87,12 +140,107 @@ bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString
 		return false;
 	}
 
+	// 最大舵角を最小回転半径から導く。**読めなければ 0 のままにする。**
+	// 「それらしい既定値」を置くと、操舵が効いているのに実車と無関係な
+	// 値で走ることになる（憲法ルール1）。
+	double TurningRadiusM = 0.0;
+	double WheelbaseM = 0.0;
+	FString SteerError;
+	if (VehicleData.GetValue(TEXT("dimensions.min_turning_radius"), TEXT("m"),
+	                         TurningRadiusM, SteerError)
+	    && VehicleData.GetValue(TEXT("dimensions.wheelbase"), TEXT("m"),
+	                            WheelbaseM, SteerError)
+	    && TurningRadiusM > 0.0)
+	{
+		MaxSteerRad = FMath::Atan2(WheelbaseM, TurningRadiusM);
+	}
+	else
+	{
+		MaxSteerRad = 0.0;
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: 最大舵角を導けない（%s）。操舵は効かない。"), *SteerError);
+	}
+
 	PhysicsState = Vehicle.InitialState(0.0, 0);
 	SimulatedTimeS = 0.0;
 	TotalStepCount = 0;
 	Accumulator.AccumulatedS = 0.0;
 	Accumulator.DroppedS = 0.0;
+	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+	{
+		VisualWheelAngleRad[Index] = 0.0;
+	}
 	bPhysicsReady = true;
+	return true;
+}
+
+void AZN6VehicleActor::ResetToStart()
+{
+	if (!bPhysicsReady)
+	{
+		return;
+	}
+
+	PhysicsState = Vehicle.InitialState(0.0, 0);
+	Control = ZN6::FControlInput();
+	RawThrottle = RawBrake = RawSteer = RawClutch = RawHandbrake = 0.0f;
+	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+	{
+		VisualWheelAngleRad[Index] = 0.0;
+	}
+	Accumulator.AccumulatedS = 0.0;
+	SyncVisualToPhysics();
+}
+
+bool AZN6VehicleActor::LoadVisualManifest(const FString& ManifestPath, FString& OutError)
+{
+	FString Text;
+	if (!FFileHelper::LoadFileToString(Text, *ManifestPath))
+	{
+		OutError = FString::Printf(TEXT("manifest を読めない: %s"), *ManifestPath);
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> Root;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Text);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	{
+		OutError = FString::Printf(TEXT("manifest の JSON を解釈できない: %s"), *ManifestPath);
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject>* Parts = nullptr;
+	if (!Root->TryGetObjectField(TEXT("parts"), Parts))
+	{
+		OutError = TEXT("manifest に parts が無い");
+		return false;
+	}
+
+	static const TCHAR* const Keys[ZN6::WheelCount] = {
+		TEXT("wheel_FL"), TEXT("wheel_FR"), TEXT("wheel_RL"), TEXT("wheel_RR")
+	};
+
+	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+	{
+		const TSharedPtr<FJsonObject>* Part = nullptr;
+		if (!(*Parts)->TryGetObjectField(Keys[Index], Part))
+		{
+			OutError = FString::Printf(TEXT("manifest に %s が無い"), Keys[Index]);
+			return false;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* Attach = nullptr;
+		if (!(*Part)->TryGetArrayField(TEXT("attach_m"), Attach) || Attach->Num() != 3)
+		{
+			OutError = FString::Printf(TEXT("%s の attach_m が3要素でない"), Keys[Index]);
+			return false;
+		}
+
+		WheelAttachM[Index] = FVector(
+			(*Attach)[0]->AsNumber(), (*Attach)[1]->AsNumber(), (*Attach)[2]->AsNumber());
+	}
+
+	bVisualManifestLoaded = true;
 	return true;
 }
 
@@ -118,17 +266,27 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 		PhysicsState = NextState;
 		SimulatedTimeS += FixedStep;
 		++TotalStepCount;
+
+		// **描画用の車輪回転角。物理には戻さない。**
+		//
+		// 固定刻みの中で積分する（フレーム時間で積分すると、車輪の見た目の
+		// 回転がフレームレートに依存する）。
+		for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+		{
+			VisualWheelAngleRad[Wheel] += PhysicsState.WheelOmegaRads[Wheel] * FixedStep;
+		}
 	}
 }
 
 void AZN6VehicleActor::SyncVisualToPhysics()
 {
-	if (!bPhysicsReady || VisualMesh == nullptr)
+	if (!bPhysicsReady || BodyMesh == nullptr)
 	{
 		return;
 	}
 
-	// **物理 -> 描画の一方向のみ。** ここで VisualMesh から値を読み戻さないこと。
+	// **物理 -> 描画の一方向のみ。** ここで描画コンポーネントから値を
+	// 読み戻さないこと。
 	//
 	// 物理は右手系 y 左方 [m]、UE は左手系 y 右方 [cm]。
 	// y の符号反転と 100 倍の単位変換をここで行う（**物理側に UE の都合を
@@ -140,15 +298,177 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 		-PhysicsState.YM * MetresToCentimetres,
 		0.0);
 
+	// 物理のヨーは左が正、UE のヨーは右が正なので符号を反転する
 	const FRotator Rotation(0.0, -FMath::RadiansToDegrees(PhysicsState.HeadingRad), 0.0);
 
 	SetActorLocationAndRotation(Location, Rotation);
+
+	if (!bVisualManifestLoaded)
+	{
+		return;
+	}
+
+	const double SteerDeg = -FMath::RadiansToDegrees(Control.SteerRad);
+
+	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+	{
+		if (!WheelMeshes.IsValidIndex(Index) || WheelMeshes[Index] == nullptr)
+		{
+			continue;
+		}
+
+		const FVector& Attach = WheelAttachM[Index];
+		WheelMeshes[Index]->SetRelativeLocation(FVector(
+			Attach.X * MetresToCentimetres,
+			-Attach.Y * MetresToCentimetres,
+			Attach.Z * MetresToCentimetres));
+
+		// **転がりは負のピッチ。** UE の正ピッチは +X を +Z へ回す
+		// （機首上げ）ので、車輪の頂点が後ろへ動く = 後転になる。
+		const double SpinDeg = -FMath::RadiansToDegrees(VisualWheelAngleRad[Index]);
+
+		// 操舵は前輪のみ。FRotator(Pitch, Yaw, Roll) は Yaw を先に効かせる
+		// ので、操舵した向きのまま転がる。
+		const bool bFront = (Index == static_cast<int32>(ZN6::EWheel::FL))
+		                 || (Index == static_cast<int32>(ZN6::EWheel::FR));
+
+		WheelMeshes[Index]->SetRelativeRotation(
+			FRotator(SpinDeg, bFront ? SteerDeg : 0.0, 0.0));
+	}
 }
 
 void AZN6VehicleActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// **入力 -> 物理 -> 描画 の順。** 逆にすると1フレーム遅れる。
+	ApplyDriverInput(DeltaSeconds);
 	AdvancePhysics(static_cast<double>(DeltaSeconds));
 	SyncVisualToPhysics();
+
+	if (bShowTelemetry)
+	{
+		DrawTelemetry();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 入力
+// ---------------------------------------------------------------------------
+
+void AZN6VehicleActor::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
+	if (PlayerInputComponent == nullptr)
+	{
+		return;
+	}
+
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Throttle"), this, &AZN6VehicleActor::InputThrottle);
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Brake"), this, &AZN6VehicleActor::InputBrake);
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Steer"), this, &AZN6VehicleActor::InputSteer);
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Clutch"), this, &AZN6VehicleActor::InputClutch);
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Handbrake"), this, &AZN6VehicleActor::InputHandbrake);
+
+	PlayerInputComponent->BindAction(TEXT("ZN6_ShiftUp"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::ShiftUp);
+	PlayerInputComponent->BindAction(TEXT("ZN6_ShiftDown"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::ShiftDown);
+	PlayerInputComponent->BindAction(TEXT("ZN6_Reset"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::ResetToStart);
+}
+
+void AZN6VehicleActor::InputThrottle(float Value) { RawThrottle = Value; }
+void AZN6VehicleActor::InputBrake(float Value) { RawBrake = Value; }
+void AZN6VehicleActor::InputSteer(float Value) { RawSteer = Value; }
+void AZN6VehicleActor::InputClutch(float Value) { RawClutch = Value; }
+void AZN6VehicleActor::InputHandbrake(float Value) { RawHandbrake = Value; }
+
+void AZN6VehicleActor::ShiftUp()
+{
+	// **上限を超えない。** 存在しないギアを入れると TotalRatio が check で落ちる。
+	Control.GearIndex = FMath::Min(Control.GearIndex + 1, ZN6::ForwardGearCount - 1);
+}
+
+void AZN6VehicleActor::ShiftDown()
+{
+	Control.GearIndex = FMath::Max(Control.GearIndex - 1, 0);
+}
+
+void AZN6VehicleActor::ApplyDriverInput(float DeltaSeconds)
+{
+	// **キーボードの 0/1 をそのまま物理へ入れない。**
+	// 踏み込み量が無い入力を生で渡すと、アクセルもブレーキも常に全開全閉に
+	// なり、FR では即スピンする。時間をかけて目標値へ寄せる。
+	auto Approach = [DeltaSeconds](float Current, float Target, float Rate)
+	{
+		const float Step = Rate * DeltaSeconds;
+		return FMath::Abs(Target - Current) <= Step
+			? Target
+			: Current + FMath::Sign(Target - Current) * Step;
+	};
+
+	const float PedalRate = DriverFeel.PedalRatePerS;
+	Control.Throttle = Approach(static_cast<float>(Control.Throttle),
+	                            FMath::Clamp(RawThrottle, 0.0f, 1.0f), PedalRate);
+	Control.Brake = Approach(static_cast<float>(Control.Brake),
+	                         FMath::Clamp(RawBrake, 0.0f, 1.0f), PedalRate);
+
+	// クラッチは踏むと切れる（0 = 切、1 = 繋）。**入力の意味を反転させる。**
+	Control.Clutch = 1.0 - FMath::Clamp(RawClutch, 0.0f, 1.0f);
+	Control.Handbrake = FMath::Clamp(RawHandbrake, 0.0f, 1.0f);
+
+	// --- 操舵 -------------------------------------------------------------
+	//
+	// 速度が上がるほど最大舵角を絞る。**操作系の補助であって車の特性では
+	// ない**（憲法ルール18）。キーボードには「少しだけ切る」が無いため、
+	// これが無いと直線で軽く当てただけでスピンする。
+	const double SpeedMps = FMath::Abs(PhysicsState.VxMps);
+	const double Falloff = 1.0 / (1.0 + DriverFeel.SteerSpeedFalloffPerMps * SpeedMps);
+	const double SteerLimit = MaxSteerRad * Falloff;
+
+	const float Target = FMath::Clamp(RawSteer, -1.0f, 1.0f);
+	const bool bReturning = FMath::IsNearlyZero(Target);
+	const float Rate = bReturning
+		? DriverFeel.SteerReturnRateRadPerS
+		: DriverFeel.SteerRateRadPerS;
+
+	Control.SteerRad = Approach(static_cast<float>(Control.SteerRad),
+	                            Target * static_cast<float>(SteerLimit), Rate);
+	Control.SteerRad = FMath::Clamp(Control.SteerRad, -SteerLimit, SteerLimit);
+}
+
+void AZN6VehicleActor::DrawTelemetry() const
+{
+	if (GEngine == nullptr || !bPhysicsReady)
+	{
+		return;
+	}
+
+	const double SpeedKmh = PhysicsState.SpeedMps() * ZN6::KmhPerMps;
+	const double Rpm = ZN6::RadsToRpm(PhysicsState.EngineOmegaRads);
+
+	// **後輪のすべりを出す。** FR なのでここがスピンの前触れになる。
+	const double RearSlip = FMath::Max(
+		FMath::Abs(PhysicsOutputs.SlipRatio[static_cast<int32>(ZN6::EWheel::RL)]),
+		FMath::Abs(PhysicsOutputs.SlipRatio[static_cast<int32>(ZN6::EWheel::RR)]));
+	const double SideslipDeg = FMath::RadiansToDegrees(PhysicsState.SideslipRad());
+
+	GEngine->AddOnScreenDebugMessage(
+		1, 0.0f, FColor::White,
+		FString::Printf(TEXT("%5.1f km/h   %5.0f rpm   %d速"),
+		                SpeedKmh, Rpm, Control.GearIndex + 1));
+	GEngine->AddOnScreenDebugMessage(
+		2, 0.0f, RearSlip > 0.20 ? FColor::Orange : FColor::Silver,
+		FString::Printf(TEXT("後輪すべり率 %.3f   車体すべり角 %+.1f deg"),
+		                RearSlip, SideslipDeg));
+	GEngine->AddOnScreenDebugMessage(
+		3, 0.0f, FColor::Silver,
+		FString::Printf(TEXT("舵角 %+.1f deg / 最大 %.1f   ｱｸｾﾙ %.2f  ﾌﾞﾚｰｷ %.2f  ｸﾗｯﾁ %.2f"),
+		                FMath::RadiansToDegrees(Control.SteerRad),
+		                FMath::RadiansToDegrees(MaxSteerRad),
+		                Control.Throttle, Control.Brake, Control.Clutch));
+	GEngine->AddOnScreenDebugMessage(
+		4, 0.0f, FColor::Silver,
+		TEXT("W/S ｱｸｾﾙ･ﾌﾞﾚｰｷ   A/D 操舵   Space ｻｲﾄﾞ   LShift ｸﾗｯﾁ   E/Q 変速   R 戻す"));
 }

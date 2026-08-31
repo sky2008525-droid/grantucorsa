@@ -1,0 +1,356 @@
+"""コース中心線から路面・地面メッシュと樹木の配置を生成する（Blender headless）.
+
+    blender --background --python Blender/build_track.py -- \
+        <track.json> <out_dir>
+
+**形状をここで定義しないこと。** 中心線は `Tracks/physics_test_track.py`
+が生成し、`Tools/export_track.py` が JSON にしたものだけを読む。
+描画側が独自にコースを持つと、物理と絵がずれる。
+
+## 起伏を走行面に入れてはいけない
+
+物理モデル（`Physics/vehicle.py`）は**平面3自由度**（前後・左右・ヨー）で、
+上下方向の動特性を持たない。サスペンションのバネ定数・減衰力が `unknown`
+のため、`Tracks/physics_test_track.py` は段差も意図的に外している。
+
+したがって**車は常に z=0 を走る。** 走行面に起伏を付けると、車が地面に
+埋まる／浮く。起伏は路肩の外側にだけ入れ、走行面は完全な平面に保つ。
+
+「見た目のために少しだけ傾ける」も駄目。物理が知らない量を絵に入れると、
+**モデルの限界が見えなくなる。**
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import random
+import sys
+import time
+
+import bpy
+import bmesh
+from mathutils import Vector, noise
+
+# 路面の外側に付ける起伏の大きさ [m] と横方向の波長 [m]。
+# **控えめにする。** 平坦な走行面から急に山が立ち上がると不自然。
+RELIEF_AMPLITUDE_M = 7.0
+RELIEF_WAVELENGTH_M = 140.0
+
+# 地面グリッドの解像度 [m] と、コース外周に取る余白 [m]
+GROUND_CELL_M = 4.0
+GROUND_MARGIN_M = 140.0
+
+# 地面を路面より何 m 下げるか。
+#
+# **0 にしてはいけない。** 走行面付近では地面も z=0 なので、路面メッシュと
+# 完全に同一平面になり、Z ファイティング（描画のちらつき）が出る。
+# 実際の道路も路肩より数 cm 高いので、下げること自体は不自然ではない。
+GROUND_SINK_M = 0.05
+
+# 路面テクスチャの繰り返し間隔 [m]（UV の V 方向）
+ROAD_UV_REPEAT_M = 8.0
+
+# 樹木の配置密度: 中心線に沿って何 m ごとに1本置くか（左右それぞれ）。
+# **木は 18〜70 m の幅に散らばるので、間隔をコース沿いの見た目の密度と
+# 同一視しないこと。** 11 m にしたときは 195 本で、並木としては疎かった。
+TREE_SPACING_M = 4.0
+
+RANDOM_SEED = 20260831
+
+
+def log(fmt, *args):
+    print(("[track] " + fmt) % args)
+
+
+def clear_scene():
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.object.delete(use_global=False)
+    for block in (bpy.data.meshes, bpy.data.objects):
+        for item in list(block):
+            try:
+                block.remove(item)
+            except (RuntimeError, ReferenceError):
+                pass
+
+
+def build_road(points, width_m):
+    """中心線の左右に幅を振って路面のリボンを作る。
+
+    UV は U が幅方向 0..1、V が距離 s をテクスチャ間隔で割ったもの。
+    **V を頂点番号ではなく実距離から作ること。** 番号だと点間隔が
+    変わったときにテクスチャの伸びが変わる。
+    """
+    half = width_m / 2.0
+    mesh = bpy.data.meshes.new("TrackRoad")
+    bm = bmesh.new()
+    uv_layer = bm.loops.layers.uv.new("UVMap")
+
+    rows = []
+    for p in points:
+        heading = p["heading_rad"]
+        # 左手側の法線（物理の座標系で Y が左）
+        nx = -math.sin(heading)
+        ny = math.cos(heading)
+        left = bm.verts.new((p["x_m"] + nx * half, p["y_m"] + ny * half, 0.0))
+        right = bm.verts.new((p["x_m"] - nx * half, p["y_m"] - ny * half, 0.0))
+        rows.append((left, right, p["s_m"]))
+
+    bm.verts.ensure_lookup_table()
+
+    count = len(rows)
+    for index in range(count):
+        left_a, right_a, s_a = rows[index]
+        # **最後の点は先頭へ繋ぐ。** 閉じた周回なので、ここを繋がないと
+        # スタートラインに幅 1 m の隙間が開く。
+        left_b, right_b, s_b = rows[(index + 1) % count]
+        if index + 1 == count:
+            s_b = s_a + (rows[1][2] - rows[0][2])
+
+        try:
+            face = bm.faces.new((left_a, right_a, right_b, left_b))
+        except ValueError:
+            continue                      # 同一面の重複。閉合部で起こりうる
+
+        v_a = s_a / ROAD_UV_REPEAT_M
+        v_b = s_b / ROAD_UV_REPEAT_M
+        for loop in face.loops:
+            if loop.vert in (left_a, left_b):
+                u = 0.0
+            else:
+                u = 1.0
+            v = v_a if loop.vert in (left_a, right_a) else v_b
+            loop[uv_layer].uv = (u, v)
+
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+
+    obj = bpy.data.objects.new("TrackRoad", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def centreline_sampler(points, stride):
+    """距離計算用に間引いた中心線。**全点使うと地面生成が現実的な時間で終わらない。**"""
+    return [(p["x_m"], p["y_m"]) for p in points[::stride]]
+
+
+def distance_to_centreline(x, y, samples):
+    best = 1e30
+    for cx, cy in samples:
+        d = (cx - x) ** 2 + (cy - y) ** 2
+        if d < best:
+            best = d
+    return math.sqrt(best)
+
+
+def build_ground(points, width_m, shoulder_m):
+    """走行面の外側にだけ起伏を持つ地面を作る。
+
+    **走行面（中心線から width/2 + shoulder 以内）は z=0 で完全に平ら。**
+    物理が平面3自由度である以上、ここに凹凸を入れてはいけない。
+    """
+    xs = [p["x_m"] for p in points]
+    ys = [p["y_m"] for p in points]
+    x0, x1 = min(xs) - GROUND_MARGIN_M, max(xs) + GROUND_MARGIN_M
+    y0, y1 = min(ys) - GROUND_MARGIN_M, max(ys) + GROUND_MARGIN_M
+
+    nx = int((x1 - x0) / GROUND_CELL_M) + 1
+    ny = int((y1 - y0) / GROUND_CELL_M) + 1
+    log("ground grid %d x %d (%.0f x %.0f m)", nx, ny, x1 - x0, y1 - y0)
+
+    # 中心線は 5 m 間隔まで間引く。判定したいのは「路面から十分離れているか」
+    # であって、1 m の精度は要らない。
+    samples = centreline_sampler(points, 5)
+
+    flat_radius = width_m / 2.0 + shoulder_m
+    # 起伏が立ち上がりきるまでの距離。急に山にならないよう余裕を取る
+    blend_radius = flat_radius + 45.0
+
+    mesh = bpy.data.meshes.new("TrackGround")
+    bm = bmesh.new()
+    uv_layer = bm.loops.layers.uv.new("UVMap")
+
+    grid = []
+    for iy in range(ny):
+        row = []
+        y = y0 + iy * GROUND_CELL_M
+        for ix in range(nx):
+            x = x0 + ix * GROUND_CELL_M
+            distance = distance_to_centreline(x, y, samples)
+
+            if distance <= flat_radius:
+                mask = 0.0
+            elif distance >= blend_radius:
+                mask = 1.0
+            else:
+                t = (distance - flat_radius) / (blend_radius - flat_radius)
+                mask = t * t * (3.0 - 2.0 * t)     # smoothstep
+
+            if mask <= 0.0:
+                z = -GROUND_SINK_M
+            else:
+                n = noise.noise(Vector((x / RELIEF_WAVELENGTH_M,
+                                        y / RELIEF_WAVELENGTH_M, 0.0)))
+                z = -GROUND_SINK_M + n * RELIEF_AMPLITUDE_M * mask
+
+            row.append(bm.verts.new((x, y, z)))
+        grid.append(row)
+
+    bm.verts.ensure_lookup_table()
+
+    # 地面のテクスチャは 10 m で1回繰り返す
+    ground_uv_scale = 1.0 / 10.0
+    for iy in range(ny - 1):
+        for ix in range(nx - 1):
+            verts = (grid[iy][ix], grid[iy][ix + 1],
+                     grid[iy + 1][ix + 1], grid[iy + 1][ix])
+            try:
+                face = bm.faces.new(verts)
+            except ValueError:
+                continue
+            for loop in face.loops:
+                loop[uv_layer].uv = (loop.vert.co.x * ground_uv_scale,
+                                     loop.vert.co.y * ground_uv_scale)
+
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+
+    obj = bpy.data.objects.new("TrackGround", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj, (x0, x1, y0, y1)
+
+
+def plan_trees(points, width_m, offsets, species):
+    """中心線に沿って樹木の配置を決める。
+
+    **路面から離す。** 物理に衝突判定が無いため、木に突っ込むと
+    すり抜ける。近くに置くほどその絵が出やすくなる。
+    """
+    rng = random.Random(RANDOM_SEED)
+    min_offset, max_offset = offsets
+    samples = centreline_sampler(points, 5)
+
+    spacing = points[1]["s_m"] - points[0]["s_m"]
+    step = max(int(TREE_SPACING_M / spacing), 1)
+
+    placements = []
+    for index in range(0, len(points), step):
+        p = points[index]
+        heading = p["heading_rad"]
+        nx = -math.sin(heading)
+        ny = math.cos(heading)
+
+        for side in (+1.0, -1.0):
+            offset = rng.uniform(min_offset, max_offset)
+            jitter = rng.uniform(-TREE_SPACING_M * 0.4, TREE_SPACING_M * 0.4)
+            x = p["x_m"] + nx * offset * side + math.cos(heading) * jitter
+            y = p["y_m"] + ny * offset * side + math.sin(heading) * jitter
+
+            # **他の区間の路面に近すぎないか必ず見る。**
+            # ヘアピンやS字では中心線が折り返すので、「自分の断面から
+            # 18 m 外側」でも別区間の路面上ということが起こる。
+            if distance_to_centreline(x, y, samples) < min_offset:
+                continue
+
+            placements.append({
+                "species": rng.choice(species),
+                "x_m": x,
+                "y_m": y,
+                "z_m": 0.0,
+                "yaw_rad": rng.uniform(0.0, 2.0 * math.pi),
+                "scale": rng.uniform(0.8, 1.35),
+            })
+    return placements
+
+
+def export_fbx(objects, path):
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in objects:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = objects[0]
+    bpy.ops.export_scene.fbx(
+        filepath=path,
+        use_selection=True,
+        apply_unit_scale=True,
+        global_scale=1.0,
+        axis_forward="X",
+        axis_up="Z",
+        mesh_smooth_type="FACE",
+        use_mesh_modifiers=True,
+        bake_space_transform=False,
+        path_mode="COPY",
+    )
+
+
+def main():
+    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    if len(argv) < 2:
+        print("usage: ... -- <track.json> <out_dir>")
+        return 1
+    track_path, out_dir = argv[0], argv[1]
+    os.makedirs(out_dir, exist_ok=True)
+
+    with open(track_path, encoding="utf-8") as handle:
+        track = json.load(handle)
+
+    points = track["points"]
+    width_m = track["width_m"]
+    shoulder_m = track["shoulder_m"]
+
+    started = time.time()
+    clear_scene()
+
+    road = build_road(points, width_m)
+    log("road: %d 面", len(road.data.polygons))
+
+    ground, extent = build_ground(points, width_m, shoulder_m)
+    log("ground: %d 面 (%.1fs)", len(ground.data.polygons), time.time() - started)
+
+    # 走行面が本当に平らかを確認する。**目視ではなく数値で。**
+    road_z = [v.co.z for v in road.data.vertices]
+    if max(abs(z) for z in road_z) > 1e-9:
+        log("!! 路面が平らでない (max |z| = %.6f)", max(abs(z) for z in road_z))
+        return 1
+    log("路面の平坦性 OK (max |z| = %.2e)", max(abs(z) for z in road_z))
+
+    species = ["pine_sapling_small", "fir_sapling", "searsia_lucida",
+               "othonna_cerarioides", "tree_stump_01"]
+    trees = plan_trees(points, width_m, track["tree_offset_m"], species)
+    log("trees: %d 本", len(trees))
+
+    counts = {}
+    for tree in trees:
+        counts[tree["species"]] = counts.get(tree["species"], 0) + 1
+    for name, count in sorted(counts.items()):
+        log("   %-22s %d", name, count)
+
+    export_fbx([road], os.path.join(out_dir, "TrackRoad.fbx"))
+    export_fbx([ground], os.path.join(out_dir, "TrackGround.fbx"))
+
+    placement = {
+        "_meta": {
+            "generator": "Blender/build_track.py",
+            "source_track": track_path,
+            "frame": "physics (X forward-ish, Y left, Z up, metres)",
+            "note": "UE 側はこの配置で樹木をインスタンス化する。手で編集しない。",
+        },
+        "track_name": track["name"],
+        "extent_m": {"x0": extent[0], "x1": extent[1], "y0": extent[2], "y1": extent[3]},
+        "road_fbx": "TrackRoad.fbx",
+        "ground_fbx": "TrackGround.fbx",
+        "species": species,
+        "trees": trees,
+    }
+    with open(os.path.join(out_dir, "placement.json"), "w", encoding="utf-8") as handle:
+        json.dump(placement, handle, ensure_ascii=False, indent=1)
+
+    log("done (%.1fs) -> %s", time.time() - started, out_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
