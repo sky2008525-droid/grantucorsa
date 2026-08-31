@@ -113,30 +113,51 @@ def configure_textures():
 
 
 def enable_nanite_everywhere():
-    """取り込んだ StaticMesh すべてで Nanite を有効にする。
+    """取り込んだ StaticMesh すべてで Nanite を有効にし、**データが出来たか確かめる。**
 
-    **取り込みオプションではなく後段で設定する。** FBX と glTF で
-    オプションの与え方が違い（前者は FbxImportUI、後者は Interchange の
-    パイプライン）、片方だけ設定して**もう片方が静かに素通りする**のを
-    避けたい。結果に対して一律に掛けるほうが確実。
+    PolyHaven の樹木は 1 本 11〜16 万ポリゴンあり、525 本で約 5,200 万
+    三角形になる。Nanite が無いと描画が破綻する。
 
-    PolyHaven の樹木は 40 万〜84 万ポリゴンあり、525 本を素で置くと
-    描画が破綻する。Nanite はまさにこの用途のもの。
+    ## `set_editor_property("nanite_settings", ...)` を使ってはいけない
+
+    あれは**フラグを立てるだけで Nanite データをビルドしない。**
+    その結果、メッシュは「Nanite 有効」だが中身が無い状態になり、
+    **画面には空しか映らなくなる**（地面も車も 525 本の木も全て消えた）。
+
+    エラーも警告も出ない。`is_visible()` は True、三角形数も
+    フォールバックの値が返るので、**調べても正常に見える。**
+    実際にこれで「レベルは正しいのに何も映らない」状態に数時間費やした。
+
+    `StaticMeshEditorSubsystem.set_nanite_settings(..., apply_changes=True)`
+    がビルドまで行う正しい入り口。そのうえで
+    `get_num_nanite_triangles()` が 0 でないことを確認する。
     """
-    changed = 0
+    subsystem = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+
+    built, failed = 0, []
     for path in unreal.EditorAssetLibrary.list_assets(PKG_ROOT, recursive=True):
         asset = unreal.EditorAssetLibrary.load_asset(path)
         if not isinstance(asset, unreal.StaticMesh):
             continue
-        settings = asset.get_editor_property("nanite_settings")
-        if settings.enabled:
-            continue
-        settings.enabled = True
-        asset.set_editor_property("nanite_settings", settings)
-        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
-        changed += 1
-    log("Nanite を有効化: %d メッシュ" % changed)
-    return changed
+
+        settings = subsystem.get_nanite_settings(asset)
+        if not settings.enabled:
+            settings.enabled = True
+            subsystem.set_nanite_settings(asset, settings, apply_changes=True)
+            unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+
+        # **ここが要。** 有効になっただけでは描画されない。
+        if asset.get_num_nanite_triangles() <= 0:
+            failed.append(asset.get_name())
+        else:
+            built += 1
+
+    log("Nanite: %d メッシュでデータを確認" % built)
+    if failed:
+        # **黙って通さない。** これを見逃すと画面が真っ白になる。
+        unreal.log_error(
+            "[ZN6 import] Nanite データが空のメッシュ: %s" % ", ".join(failed))
+    return len(failed) == 0
 
 
 def run_tasks(tasks):
