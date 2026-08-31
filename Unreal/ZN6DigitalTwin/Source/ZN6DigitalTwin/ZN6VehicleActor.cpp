@@ -154,6 +154,10 @@ void AZN6VehicleActor::BeginPlay()
 		UE_LOG(LogTemp, Warning,
 		       TEXT("ZN6: 障害物を読めない: %s。当たり判定なしで走る。"), *Error);
 	}
+
+	// **最後に、今いる地面の上で釣り合わせる。**
+	// 地形を読んだ後でないと、平地の姿勢のまま坂に置かれて跳ねる。
+	SettleRide();
 }
 
 bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString& OutError)
@@ -162,6 +166,17 @@ bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString
 	{
 		return false;
 	}
+	// 接地モデル。**読めなくても平面3自由度は動く**ので、失敗しても
+	// 物理そのものは止めない。ただし黙って無効にはしない。
+	FString RideError;
+	bRideReady = Ride.Init(VehicleData, RideError);
+	if (!bRideReady)
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: 接地モデルを初期化できない: %s。車体は地面の高さに"
+		            "置かれるだけになる（重力で支えられない）。"), *RideError);
+	}
+
 	if (!Vehicle.Init(VehicleData, /*bUseLsd=*/true, OutError))
 	{
 		return false;
@@ -254,6 +269,35 @@ double AZN6VehicleActor::GetDistanceToTrackEdgeM() const
 	return TrackEdge.DistanceToEdgeM(PhysicsState.XM, PhysicsState.YM);
 }
 
+void AZN6VehicleActor::SettleRide()
+{
+	if (!bRideReady)
+	{
+		return;
+	}
+
+	// 今いる場所の地面を先に調べる。**姿勢を決める前に地面を知る。**
+	SampleGround();
+
+	ZN6::FRideState Settled;
+	ZN6::FRideOutputs Outputs;
+	if (Ride.Settle(WheelGroundM, Settled, Outputs))
+	{
+		RideState = Settled;
+		RideOutputs = Outputs;
+		return;
+	}
+
+	// **収束しなかったことを黙って通さない**（憲法ルール6）。
+	// 落ち着かない場所（穴の上など）に置かれた可能性がある。
+	UE_LOG(LogTemp, Warning,
+	       TEXT("ZN6: 接地の釣り合いに収束しない（(%.1f, %.1f) 付近）。"
+	            "そのまま動的に落ち着かせる。"),
+	       PhysicsState.XM, PhysicsState.YM);
+	RideState = Settled;
+	RideOutputs = Outputs;
+}
+
 bool AZN6VehicleActor::LoadObstacles(const FString& PlacementPath, FString& OutError)
 {
 	bObstaclesLoaded = false;
@@ -281,6 +325,10 @@ void AZN6VehicleActor::SampleGround()
 		TerrainPitchRad = TerrainRollRad = 0.0;
 		SlopeGxMps2 = SlopeGyMps2 = 0.0;
 		NormalScale = 1.0;
+		for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+		{
+			WheelGroundM[Index] = 0.0;
+		}
 		return;
 	}
 
@@ -295,6 +343,8 @@ void AZN6VehicleActor::SampleGround()
 		const double WorldX = PhysicsState.XM + Attach.X * CosH - Attach.Y * SinH;
 		const double WorldY = PhysicsState.YM + Attach.X * SinH + Attach.Y * CosH;
 		Height[Index] = Heightfield.HeightAt(WorldX, WorldY);
+		// **接地モデルは4点別々に使う。** 平均だと片輪だけの段差が消える。
+		WheelGroundM[Index] = Height[Index];
 	}
 
 	const int32 FL = static_cast<int32>(ZN6::EWheel::FL);
@@ -421,6 +471,20 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 			                                 Vehicle.GetMassKg(), Vehicle.GetIzzKgm2());
 		}
 
+		// **接地を解く。** ここで初めて、車体が「地面に置かれている」
+		// のではなく「車輪に支えられている」状態になる。
+		//
+		// 車輪の下の地面は4点別々（SampleGround が入れた）。片輪だけ
+		// 段差に乗れば、その輪だけ縮む。落ちれば接地が切れて力が 0 になる。
+		if (bRideReady && bUseRideModel)
+		{
+			ZN6::FRideState NextRide;
+			Ride.Step(RideState, FixedStep, WheelGroundM,
+			          PhysicsOutputs.AxMps2, PhysicsOutputs.AyMps2,
+			          NextRide, RideOutputs);
+			RideState = NextRide;
+		}
+
 		SimulatedTimeS += FixedStep;
 		++TotalStepCount;
 
@@ -514,15 +578,39 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 	// 少し上の点を中心に回す（**ロールセンタではなく、見た目が破綻しない
 	// 高さを選んでいるだけ**）。
 	{
-		// 地形の傾き（**物理の一部**）に、荷重移動の可視化（演出）を足す。
-		// 前者は地面そのもの、後者は見せ方。**性質が違うので分けて持つ。**
-		const FRotator BodyTilt(
-			FMath::RadiansToDegrees(VisualPitchRad + TerrainPitchRad),
-			0.0,
-			FMath::RadiansToDegrees(VisualRollRad + TerrainRollRad));
+		// **接地モデルが入っていれば、姿勢は演出ではなく物理そのもの。**
+		//
+		// 接地モデルは地面の傾きも荷重移動もまとめて解いている。
+		// 坂に置けば坂なりに、加速すれば機首上げに落ち着く。だから
+		// TerrainPitchRad（幾何から出した地面の傾き）も
+		// VisualPitchRad（荷重移動の可視化）も足さない。**足すと二重になる。**
+		//
+		// 接地モデルを切ったときだけ、以前の見せ方に戻す。
+		double PitchDeg = 0.0;
+		double RollDeg = 0.0;
+		double BodyRiseCm = 0.0;
+
+		if (IsUsingRideModel())
+		{
+			PitchDeg = FMath::RadiansToDegrees(RideState.PitchRad);
+			RollDeg = FMath::RadiansToDegrees(RideState.RollRad);
+			// Actor は接地面の平均高さに置いてあるので、車体はそこからの
+			// 差だけ動かす。**沈み込みが見えるのはここ。**
+			BodyRiseCm = (RideState.HeaveM - GroundHeightM) * MetresToCentimetres;
+		}
+		else
+		{
+			// 地形の傾き（**物理の一部**）に、荷重移動の可視化（演出）を足す。
+			// 前者は地面そのもの、後者は見せ方。**性質が違うので分けて持つ。**
+			PitchDeg = FMath::RadiansToDegrees(VisualPitchRad + TerrainPitchRad);
+			RollDeg = FMath::RadiansToDegrees(VisualRollRad + TerrainRollRad);
+		}
+
+		const FRotator BodyTilt(PitchDeg, 0.0, RollDeg);
 
 		const FVector Pivot(0.0, 0.0, AttitudeFeel.PivotHeightM * MetresToCentimetres);
-		BodyMesh->SetRelativeLocation(Pivot - BodyTilt.RotateVector(Pivot));
+		BodyMesh->SetRelativeLocation(
+			Pivot - BodyTilt.RotateVector(Pivot) + FVector(0.0, 0.0, BodyRiseCm));
 		BodyMesh->SetRelativeRotation(BodyTilt);
 	}
 
@@ -543,14 +631,35 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 		// メッシュもマテリアルも正常で `is_visible()` も True なので、
 		// 調べても異常が見えない。実際に走らせて「タイヤが見えない」と
 		// 指摘されるまで気づけなかった。
-		if (bVisualManifestLoaded)
+		// **基準位置は最初の1回だけ決める。**
+		// 毎フレーム manifest から書き直すと、読めなかったときに
+		// 車輪が原点へ飛ぶ（レベル側で設定済みの位置を潰す）。
+		if (!bWheelBaseCaptured)
 		{
-			const FVector& Attach = WheelAttachM[Index];
-			WheelMeshes[Index]->SetRelativeLocation(FVector(
-				Attach.X * MetresToCentimetres,
-				-Attach.Y * MetresToCentimetres,
-				Attach.Z * MetresToCentimetres));
+			if (bVisualManifestLoaded)
+			{
+				const FVector& Attach = WheelAttachM[Index];
+				WheelBaseLocationCm[Index] = FVector(
+					Attach.X * MetresToCentimetres,
+					-Attach.Y * MetresToCentimetres,
+					Attach.Z * MetresToCentimetres);
+			}
+			else
+			{
+				WheelBaseLocationCm[Index] = WheelMeshes[Index]->GetRelativeLocation();
+			}
 		}
+
+		// **車輪はそれぞれの下の地面に付いている。**
+		// 車体だけが上下するので、段差では車輪が車体に対して動いて見える。
+		// これがサスペンションのストローク。
+		double WheelRiseCm = 0.0;
+		if (IsUsingRideModel())
+		{
+			WheelRiseCm = (WheelGroundM[Index] - GroundHeightM) * MetresToCentimetres;
+		}
+		WheelMeshes[Index]->SetRelativeLocation(
+			WheelBaseLocationCm[Index] + FVector(0.0, 0.0, WheelRiseCm));
 
 		// **転がりは負のピッチ。** UE の正ピッチは +X を +Z へ回す
 		// （機首上げ）ので、車輪の頂点が後ろへ動く = 後転になる。
@@ -564,6 +673,10 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 		WheelMeshes[Index]->SetRelativeRotation(
 			FRotator(SpinDeg, bFront ? SteerDeg : 0.0, 0.0));
 	}
+
+	// **4輪ぶん読み終えてから立てる。** ループの中で立てると、
+	// 2輪目以降が「もう取得済み」と判断されて基準位置を持たない。
+	bWheelBaseCaptured = true;
 }
 
 void AZN6VehicleActor::Tick(float DeltaSeconds)

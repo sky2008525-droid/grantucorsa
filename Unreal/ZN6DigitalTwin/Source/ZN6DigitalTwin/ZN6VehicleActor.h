@@ -18,6 +18,7 @@
 #include "GameFramework/Pawn.h"
 #include "Audio/ZN6VehicleAudioComponent.h"
 #include "Physics/ZN6Obstacles.h"
+#include "Physics/ZN6Ride.h"
 #include "Physics/ZN6Track.h"
 #include "Physics/ZN6Terrain.h"
 #include "Physics/ZN6Vehicle.h"
@@ -238,6 +239,38 @@ public:
 	/** 車体が乗っている地面の高さ [m]（4輪の接地点の平均）。 */
 	double GetGroundHeightM() const { return GroundHeightM; }
 
+	/**
+	 * 接地モデル（上下・ピッチ・ロール）。
+	 *
+	 * **これが入るまで、車体は地面の高さに置かれているだけだった。**
+	 * 重力で落ちていないので、何にも支えられていなかった。今は
+	 * 車輪が地面を押し、押し返された力で車体が支えられている。
+	 */
+	const ZN6::FRideState& GetRideState() const { return RideState; }
+	const ZN6::FRideOutputs& GetRideOutputs() const { return RideOutputs; }
+	const ZN6::FRideModel& GetRideModel() const { return Ride; }
+	bool IsRideReady() const { return bRideReady; }
+
+	/**
+	 * 接地モデルを使うか。**切れるようにしてある**（憲法ルール18）。
+	 *
+	 * 切ると、地形の傾きを幾何から出す以前の見せ方に戻る。
+	 * 検証のためであって、通常は入れたままでよい。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Physics")
+	void SetUseRideModel(bool bEnabled) { bUseRideModel = bEnabled; }
+
+	UFUNCTION(BlueprintPure, Category = "ZN6|Physics")
+	bool IsUsingRideModel() const { return bUseRideModel && bRideReady; }
+
+	/**
+	 * 今いる地面の上で釣り合い姿勢に落ち着かせる。
+	 *
+	 * **位置を変えたら呼ぶこと。** 呼ばないと、前の場所の姿勢のまま
+	 * 新しい地面に置かれ、そこから落ちたり跳ねたりする。
+	 */
+	void SettleRide();
+
 	/** 地形による車体の傾き [rad]。**演出ではなく地形そのもの。** */
 	double GetTerrainPitchRad() const { return TerrainPitchRad; }
 	double GetTerrainRollRad() const { return TerrainRollRad; }
@@ -430,6 +463,31 @@ private:
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "ZN6|Audio")
 	TObjectPtr<UZN6VehicleAudioComponent> Audio;
+
+	/**
+	 * 接地モデル。**Vehicle.Step の後**に解く。
+	 *
+	 * FVehicle が前後・左右・ヨーを、こちらが上下・ピッチ・ロールを解く。
+	 * **繋がっているのは接地力だけ。**
+	 */
+	ZN6::FRideModel Ride;
+	ZN6::FRideState RideState;
+	ZN6::FRideOutputs RideOutputs;
+	bool bRideReady = false;
+	bool bUseRideModel = true;
+
+	/** 各車輪の下の地面の高さ [m]。SampleGround が更新する。 */
+	double WheelGroundM[ZN6::WheelCount] = {};
+
+	/**
+	 * 車輪メッシュの基準位置 [cm]（サスペンションの動きを足す前）。
+	 *
+	 * **レベル側で設定済みの位置を上書きしないため**に、最初の1回だけ
+	 * 読み取って覚えておく。毎フレーム SetRelativeLocation で上書きすると、
+	 * manifest を読めなかったときに車輪が原点へ飛ぶ。
+	 */
+	FVector WheelBaseLocationCm[ZN6::WheelCount] = {};
+	bool bWheelBaseCaptured = false;
 
 	/** 障害物。**Vehicle.Step の後**に解く。 */
 	ZN6::FObstacleField Obstacles;
