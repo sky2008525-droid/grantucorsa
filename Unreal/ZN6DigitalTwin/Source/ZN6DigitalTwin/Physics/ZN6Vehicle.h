@@ -115,12 +115,31 @@ namespace ZN6
 	public:
 		bool Init(FVehicleData& Data, bool bUseLsd, FString& OutError);
 
-		/** 状態を Dt 進め、新しい状態と内部量を返す。 */
+		/**
+		 * 状態を Dt 進め、新しい状態と内部量を返す。
+		 *
+		 * SlopeG* は斜面が車体に与える重力成分 [m/s^2]（車体固定系）、
+		 * NormalScale は法線荷重の係数。**既定は平地**で、そのときの結果は
+		 * 地形を入れる前と完全に一致する（参照値が変わらない）。
+		 *
+		 * 地形の値は ZN6Terrain が高さ場から求める。
+		 * **描画メッシュからは読まない**（憲法ルール4）。
+		 */
 		void Step(const FVehicleState& State, const FControlInput& Control, double DtS,
-		          FVehicleState& OutState, FVehicleOutputs& OutOutputs);
+		          FVehicleState& OutState, FVehicleOutputs& OutOutputs,
+		          double SlopeGxMps2 = 0.0, double SlopeGyMps2 = 0.0,
+		          double NormalScale = 1.0);
 
-		/** 準静的な4輪の垂直荷重 [N]。FR なので加速で駆動輪（後輪）に乗る。 */
-		void WheelLoadsN(double AxMps2, double AyMps2, double OutLoadsN[WheelCount]) const;
+		/**
+		 * 準静的な4輪の垂直荷重 [N]。FR なので加速で駆動輪（後輪）に乗る。
+		 *
+		 * **Ax / Ay は加速度計が読む値（タイヤ力/質量）を渡すこと。**
+		 * 斜面で停車していると、タイヤ力が重力と釣り合って Ax = g*sin(傾き)
+		 * になり、坂の下側の軸へ荷重が移るという正しい結果が出る。
+		 * 重力を別に足すと二重に数えることになる。
+		 */
+		void WheelLoadsN(double AxMps2, double AyMps2, double OutLoadsN[WheelCount],
+		                 double NormalScale = 1.0) const;
 
 		FVehicleState InitialState(double SpeedMps, int32 GearIndex) const;
 

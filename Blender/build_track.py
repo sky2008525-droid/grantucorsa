@@ -203,8 +203,10 @@ def build_ground(points, width_m, shoulder_m):
     uv_layer = bm.loops.layers.uv.new("UVMap")
 
     grid = []
+    heights = []
     for iy in range(ny):
         row = []
+        height_row = []
         y = y0 + iy * GROUND_CELL_M
         for ix in range(nx):
             x = x0 + ix * GROUND_CELL_M
@@ -218,7 +220,9 @@ def build_ground(points, width_m, shoulder_m):
                 z = -GROUND_SINK_M + n * RELIEF_AMPLITUDE_M * mask
 
             row.append(bm.verts.new((x, y, z)))
+            height_row.append(z)
         grid.append(row)
+        heights.append(height_row)
 
     bm.verts.ensure_lookup_table()
 
@@ -246,7 +250,16 @@ def build_ground(points, width_m, shoulder_m):
 
     obj = bpy.data.objects.new("TrackGround", mesh)
     bpy.context.scene.collection.objects.link(obj)
-    return obj, (x0, x1, y0, y1)
+
+    # **高さ場を一緒に返す。** 物理側はこれを読んで接地を計算する。
+    # 描画メッシュを物理へ流用しない（憲法ルール4）ための唯一の情報源。
+    heightfield = {
+        "x0_m": x0, "y0_m": y0,
+        "cell_m": GROUND_CELL_M,
+        "nx": nx, "ny": ny,
+        "heights_m": heights,
+    }
+    return obj, (x0, x1, y0, y1), heightfield
 
 
 def plan_trees(points, width_m, offsets, species_list):
@@ -337,7 +350,7 @@ def main():
     road = build_road(points, width_m)
     log("road: %d 面", len(road.data.polygons))
 
-    ground, extent = build_ground(points, width_m, shoulder_m)
+    ground, extent, heightfield = build_ground(points, width_m, shoulder_m)
     log("ground: %d 面 (%.1fs)", len(ground.data.polygons), time.time() - started)
 
     # 走行面が本当に平らかを確認する。**目視ではなく数値で。**
@@ -400,6 +413,32 @@ def main():
     }
     with open(os.path.join(out_dir, "placement.json"), "w", encoding="utf-8") as handle:
         json.dump(placement, handle, ensure_ascii=False, indent=1)
+
+    # --- 高さ場 -----------------------------------------------------------
+    #
+    # **物理と描画で同じ地形を使うための唯一の情報源。**
+    # 描画メッシュ（TrackGround.fbx）から高さを読み取ると、憲法ルール4
+    # （物理計算に表示用3Dモデルを流用しない）に反する。生成元のデータを
+    # 直接配る。
+    #
+    # 値は mm 単位まで丸める。**それ以上の精度は意味が無い**（地形は
+    # 4 m グリッドの線形補間で、元が滑らかな関数）。
+    heightfield["heights_m"] = [
+        [round(z, 3) for z in row] for row in heightfield["heights_m"]
+    ]
+    heightfield["_meta"] = {
+        "generator": "Blender/build_track.py",
+        "note": "**手で編集しないこと。** 地形を変えたら再生成する。"
+                "物理（接地）と描画（地面メッシュ）が同じ値を使う。",
+        "frame": "physics (X forward-ish, Y left, Z up, metres)",
+        "ground_sink_m": GROUND_SINK_M,
+        "drivable_flat_margin_m": DRIVABLE_FLAT_MARGIN_M,
+    }
+    with open(os.path.join(out_dir, "heightfield.json"), "w", encoding="utf-8") as handle:
+        json.dump(heightfield, handle, ensure_ascii=False, separators=(",", ":"))
+
+    log("heightfield: %d x %d（%.0f m 格子）", heightfield["nx"], heightfield["ny"],
+        heightfield["cell_m"])
 
     log("done (%.1fs) -> %s", time.time() - started, out_dir)
     return 0

@@ -16,6 +16,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "Physics/ZN6Terrain.h"
 #include "Physics/ZN6Vehicle.h"
 #include "ZN6VehicleActor.generated.h"
 
@@ -198,6 +199,21 @@ public:
 	 */
 	bool LoadVisualManifest(const FString& ManifestPath, FString& OutError);
 
+	/**
+	 * 地形の高さ場を読む。
+	 *
+	 * **読めなければ平地として走る。** 既定値をでっち上げるより、
+	 * 「地形が無い」ほうが誤解が無い。警告は出す。
+	 */
+	bool LoadHeightfield(const FString& HeightfieldPath, FString& OutError);
+
+	/** 車体が乗っている地面の高さ [m]（4輪の接地点の平均）。 */
+	double GetGroundHeightM() const { return GroundHeightM; }
+
+	/** 地形による車体の傾き [rad]。**演出ではなく地形そのもの。** */
+	double GetTerrainPitchRad() const { return TerrainPitchRad; }
+	double GetTerrainRollRad() const { return TerrainRollRad; }
+
 	/** 物理だけを1フレームぶん進める（描画を伴わない。テスト用）。 */
 	void AdvancePhysics(double FrameDeltaS);
 
@@ -362,6 +378,25 @@ private:
 
 	/** 姿勢を Dt 進める（固定刻みの中で呼ぶ）。 */
 	void AdvanceVisualAttitude(double DtS);
+
+	/**
+	 * 車が乗っている地面を調べ、高さ・傾き・斜面重力を更新する。
+	 *
+	 * **4輪の接地点を使う。** 重心1点だと、片輪だけ段差に乗った状況で
+	 * 車体が傾かない。
+	 */
+	void SampleGround();
+
+	ZN6::FHeightfield Heightfield;
+	bool bHeightfieldLoaded = false;
+
+	/** 接地面の状態。SampleGround が更新する。 */
+	double GroundHeightM = 0.0;
+	double TerrainPitchRad = 0.0;
+	double TerrainRollRad = 0.0;
+	double SlopeGxMps2 = 0.0;
+	double SlopeGyMps2 = 0.0;
+	double NormalScale = 1.0;
 
 	/**
 	 * 最大舵角 [rad]。

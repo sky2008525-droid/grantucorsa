@@ -127,6 +127,13 @@ void AZN6VehicleActor::BeginPlay()
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ZN6: 車輪の取り付け位置を読めない: %s"), *Error);
 	}
+
+	// 地形。**読めなければ平地として走る**（既定値をでっち上げない）。
+	if (!LoadHeightfield(RepoRoot / TEXT("Tracks/Export/heightfield.json"), Error))
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: 地形を読めない: %s。平地として走る。"), *Error);
+	}
 }
 
 bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString& OutError)
@@ -192,6 +199,68 @@ void AZN6VehicleActor::ResetToStart()
 	VisualPitchRad = VisualPitchRateRads = 0.0;
 	Accumulator.AccumulatedS = 0.0;
 	SyncVisualToPhysics();
+}
+
+bool AZN6VehicleActor::LoadHeightfield(const FString& HeightfieldPath, FString& OutError)
+{
+	bHeightfieldLoaded = Heightfield.LoadFromFile(HeightfieldPath, OutError);
+	return bHeightfieldLoaded;
+}
+
+void AZN6VehicleActor::SampleGround()
+{
+	if (!bHeightfieldLoaded)
+	{
+		// **平地として扱う。** 既定値をでっち上げない。
+		GroundHeightM = 0.0;
+		TerrainPitchRad = TerrainRollRad = 0.0;
+		SlopeGxMps2 = SlopeGyMps2 = 0.0;
+		NormalScale = 1.0;
+		return;
+	}
+
+	// 4輪の接地点を世界座標で求める。**重心1点では車体が傾かない。**
+	const double CosH = FMath::Cos(PhysicsState.HeadingRad);
+	const double SinH = FMath::Sin(PhysicsState.HeadingRad);
+
+	double Height[ZN6::WheelCount] = {};
+	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+	{
+		const FVector& Attach = WheelAttachM[Index];
+		const double WorldX = PhysicsState.XM + Attach.X * CosH - Attach.Y * SinH;
+		const double WorldY = PhysicsState.YM + Attach.X * SinH + Attach.Y * CosH;
+		Height[Index] = Heightfield.HeightAt(WorldX, WorldY);
+	}
+
+	const int32 FL = static_cast<int32>(ZN6::EWheel::FL);
+	const int32 FR = static_cast<int32>(ZN6::EWheel::FR);
+	const int32 RL = static_cast<int32>(ZN6::EWheel::RL);
+	const int32 RR = static_cast<int32>(ZN6::EWheel::RR);
+
+	GroundHeightM = (Height[FL] + Height[FR] + Height[RL] + Height[RR]) / 4.0;
+
+	// 前後・左右の高さ差から車体の傾きを出す。
+	// **後ろが低ければ機首上げ**（ピッチ正）。
+	const double FrontZ = (Height[FL] + Height[FR]) / 2.0;
+	const double RearZ = (Height[RL] + Height[RR]) / 2.0;
+	const double LeftZ = (Height[FL] + Height[RL]) / 2.0;
+	const double RightZ = (Height[FR] + Height[RR]) / 2.0;
+
+	const double WheelbaseM = FMath::Max(
+		WheelAttachM[FL].X - WheelAttachM[RL].X, 0.1);
+	const double TrackM = FMath::Max(
+		WheelAttachM[FL].Y - WheelAttachM[FR].Y, 0.1);
+
+	TerrainPitchRad = FMath::Atan2(RearZ - FrontZ, WheelbaseM);
+	// **左が高ければ右へ傾く**（UE の正のロールは右下がり）。
+	TerrainRollRad = FMath::Atan2(LeftZ - RightZ, TrackM);
+
+	// 斜面方向の重力。**車の位置での勾配を使う。**
+	double DzDx = 0.0;
+	double DzDy = 0.0;
+	Heightfield.SlopeAt(PhysicsState.XM, PhysicsState.YM, DzDx, DzDy);
+	ZN6::BodyGravity(DzDx, DzDy, PhysicsState.HeadingRad,
+	                 SlopeGxMps2, SlopeGyMps2, NormalScale);
 }
 
 bool AZN6VehicleActor::LoadVisualManifest(const FString& ManifestPath, FString& OutError)
@@ -263,8 +332,12 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 
 	for (int32 Step = 0; Step < Steps; ++Step)
 	{
+		// **地面を先に調べる。** 車の位置が変わるたびに斜面も変わる。
+		SampleGround();
+
 		ZN6::FVehicleState NextState;
-		Vehicle.Step(PhysicsState, Control, FixedStep, NextState, PhysicsOutputs);
+		Vehicle.Step(PhysicsState, Control, FixedStep, NextState, PhysicsOutputs,
+		             SlopeGxMps2, SlopeGyMps2, NormalScale);
 		PhysicsState = NextState;
 		SimulatedTimeS += FixedStep;
 		++TotalStepCount;
@@ -339,10 +412,11 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 	// 持ち込まない**）。
 	constexpr double MetresToCentimetres = 100.0;
 
+	// **地面の高さに乗せる。** z=0 固定だと、起伏の上で浮く／埋まる。
 	const FVector Location(
 		PhysicsState.XM * MetresToCentimetres,
 		-PhysicsState.YM * MetresToCentimetres,
-		0.0);
+		GroundHeightM * MetresToCentimetres);
 
 	// 物理のヨーは左が正、UE のヨーは右が正なので符号を反転する
 	const FRotator Rotation(0.0, -FMath::RadiansToDegrees(PhysicsState.HeadingRad), 0.0);
@@ -358,10 +432,12 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 	// 少し上の点を中心に回す（**ロールセンタではなく、見た目が破綻しない
 	// 高さを選んでいるだけ**）。
 	{
+		// 地形の傾き（**物理の一部**）に、荷重移動の可視化（演出）を足す。
+		// 前者は地面そのもの、後者は見せ方。**性質が違うので分けて持つ。**
 		const FRotator BodyTilt(
-			FMath::RadiansToDegrees(VisualPitchRad),
+			FMath::RadiansToDegrees(VisualPitchRad + TerrainPitchRad),
 			0.0,
-			FMath::RadiansToDegrees(VisualRollRad));
+			FMath::RadiansToDegrees(VisualRollRad + TerrainRollRad));
 
 		const FVector Pivot(0.0, 0.0, AttitudeFeel.PivotHeightM * MetresToCentimetres);
 		BodyMesh->SetRelativeLocation(Pivot - BodyTilt.RotateVector(Pivot));

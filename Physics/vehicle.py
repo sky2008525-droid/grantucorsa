@@ -155,15 +155,24 @@ class Vehicle:
 
     # --- 荷重 -------------------------------------------------------------
 
-    def wheel_loads_n(self, ax_mps2: float, ay_mps2: float) -> Dict[str, float]:
+    def wheel_loads_n(self, ax_mps2: float, ay_mps2: float,
+                      normal_scale: float = 1.0) -> Dict[str, float]:
         """準静的な4輪の垂直荷重 [N]。
 
         前後: 加速で後軸へ。**FR なので駆動輪の荷重が増える。**
         左右: 前後ロール剛性配分で分配する。
+
+        `normal_scale` は斜面での法線荷重の係数（平地なら 1.0）。
+        傾いた面では垂直荷重が mg*cos(傾き) になる。
+
+        **ax / ay は加速度計が読む値（タイヤ力/質量）を渡すこと。**
+        斜面で停車していると、タイヤ力が重力と釣り合って ax = g*sin(傾き)
+        になり、**坂の下側の軸へ荷重が移る**という正しい結果が出る。
+        重力を別に足すと二重に数えることになる。
         """
         longitudinal_transfer = self.mass_kg * ax_mps2 * self.cg_height_m / self.wheelbase_m
-        front_total = self.static_front_n - longitudinal_transfer
-        rear_total = self.static_rear_n + longitudinal_transfer
+        front_total = self.static_front_n * normal_scale - longitudinal_transfer
+        rear_total = self.static_rear_n * normal_scale + longitudinal_transfer
 
         lateral_front = (
             self.roll_dist_front * self.mass_kg * ay_mps2
@@ -199,15 +208,25 @@ class Vehicle:
 
     # --- 1ステップ --------------------------------------------------------
 
-    def step(self, state: VehicleState, control: ControlInput, dt_s: float):
-        """状態を dt 進め、(新しい状態, 内部量) を返す。"""
+    def step(self, state: VehicleState, control: ControlInput, dt_s: float,
+             slope_gx_mps2: float = 0.0, slope_gy_mps2: float = 0.0,
+             normal_scale: float = 1.0):
+        """状態を dt 進め、(新しい状態, 内部量) を返す。
+
+        `slope_*` は斜面が車体に与える重力成分 [m/s^2]（車体固定系）、
+        `normal_scale` は法線荷重の係数。**既定は平地**で、そのときの
+        結果は地形を入れる前と完全に一致する（参照値が変わらない）。
+
+        地形の値は `Physics/terrain.py` が高さ場から求める。
+        **描画メッシュからは読まない**（憲法ルール4）。
+        """
         outputs = VehicleOutputs()
 
         # --- 前ステップの加速度から荷重を決める（準静的） ---
         # 反復せず1ステップ遅らせる。dt が十分小さければ差は無視できる。
         ax_prev = getattr(self, "_last_ax", 0.0)
         ay_prev = getattr(self, "_last_ay", 0.0)
-        fz = self.wheel_loads_n(ax_prev, ay_prev)
+        fz = self.wheel_loads_n(ax_prev, ay_prev, normal_scale)
 
         # --- エンジンとクラッチ ---
         #
@@ -340,8 +359,11 @@ class Vehicle:
         # これを ay として記録すると「μ 1.1 で 2.8g」という偽の警告が出る。
         ax_mps2 = sum_fx / self.mass_kg
         ay_mps2 = sum_fy / self.mass_kg
-        vx_dot = ax_mps2 + state.vy_mps * state.yaw_rate_rads
-        vy_dot = ay_mps2 - state.vx_mps * state.yaw_rate_rads
+        # **重力は状態微分にだけ足す。** ax_mps2 は加速度計が読む値
+        # （タイヤ力/質量）のままにしておく。そうしないと荷重移動が
+        # 二重に数えられる（wheel_loads_n のコメント参照）。
+        vx_dot = ax_mps2 + slope_gx_mps2 + state.vy_mps * state.yaw_rate_rads
+        vy_dot = ay_mps2 + slope_gy_mps2 - state.vx_mps * state.yaw_rate_rads
         yaw_accel = sum_mz / self.izz_kgm2
 
         self._last_ax = ax_mps2

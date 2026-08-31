@@ -76,12 +76,13 @@ namespace ZN6
 		return true;
 	}
 
-	void FVehicle::WheelLoadsN(double AxMps2, double AyMps2, double OutLoadsN[WheelCount]) const
+	void FVehicle::WheelLoadsN(double AxMps2, double AyMps2, double OutLoadsN[WheelCount],
+	                           double NormalScale) const
 	{
 		// 前後: 加速で後軸へ。**FR なので駆動輪の荷重が増える。**
 		const double LongitudinalTransfer = MassKg * AxMps2 * CgHeightM / WheelbaseM;
-		const double FrontTotal = StaticFrontN - LongitudinalTransfer;
-		const double RearTotal = StaticRearN + LongitudinalTransfer;
+		const double FrontTotal = StaticFrontN * NormalScale - LongitudinalTransfer;
+		const double RearTotal = StaticRearN * NormalScale + LongitudinalTransfer;
 
 		// 左右: 前後ロール剛性配分で分配する
 		const double LateralFront = RollDistFront * MassKg * AyMps2 * CgHeightM / TrackFrontM;
@@ -197,14 +198,15 @@ namespace ZN6
 	}
 
 	void FVehicle::Step(const FVehicleState& State, const FControlInput& Control, double DtS,
-	                    FVehicleState& OutState, FVehicleOutputs& OutOutputs)
+	                    FVehicleState& OutState, FVehicleOutputs& OutOutputs,
+	                    double SlopeGxMps2, double SlopeGyMps2, double NormalScale)
 	{
 		OutOutputs = FVehicleOutputs();
 
 		// --- 前ステップの加速度から荷重を決める（準静的）---
 		// 反復せず1ステップ遅らせる。dt が十分小さければ差は無視できる。
 		double Fz[WheelCount];
-		WheelLoadsN(LastAxMps2, LastAyMps2, Fz);
+		WheelLoadsN(LastAxMps2, LastAyMps2, Fz, NormalScale);
 
 		// --- エンジンとクラッチ ---
 		const double RearOmegaMean =
@@ -360,8 +362,11 @@ namespace ZN6
 		// これを ay として記録すると「mu 1.1 で 2.8g」という偽の警告が出る。
 		const double AxMps2 = SumFx / MassKg;
 		const double AyMps2 = SumFy / MassKg;
-		const double VxDot = AxMps2 + State.VyMps * State.YawRateRads;
-		const double VyDot = AyMps2 - State.VxMps * State.YawRateRads;
+		// **重力は状態微分にだけ足す。** AxMps2 は加速度計が読む値
+		// （タイヤ力/質量）のままにしておく。そうしないと荷重移動が
+		// 二重に数えられる（WheelLoadsN のコメント参照）。
+		const double VxDot = AxMps2 + SlopeGxMps2 + State.VyMps * State.YawRateRads;
+		const double VyDot = AyMps2 + SlopeGyMps2 - State.VxMps * State.YawRateRads;
 		const double YawAccel = SumMz / IzzKgm2;
 
 		LastAxMps2 = AxMps2;

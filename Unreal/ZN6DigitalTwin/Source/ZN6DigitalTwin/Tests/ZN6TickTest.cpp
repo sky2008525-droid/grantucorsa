@@ -14,6 +14,7 @@
 #include "Engine/World.h"
 #include "HAL/PlatformTime.h"
 
+#include "Physics/ZN6Terrain.h"
 #include "Physics/ZN6Units.h"
 #include "ZN6VehicleActor.h"
 
@@ -724,6 +725,148 @@ bool FZN6BodyAttitudeFollowsLoadTransfer::RunTest(const FString& Parameters)
 	TestEqual(TEXT("姿勢の設定を変えても vy が変わらない"), Wild.VyMps, Mild.VyMps);
 	TestEqual(TEXT("姿勢の設定を変えてもヨーレートが変わらない"),
 	          Wild.YawRateRads, Mild.YawRateRads);
+
+	DestroyWorld(World);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// 地形（接地と斜面の重力）
+// ---------------------------------------------------------------------------
+//
+// **符号を推測で書かない。** 下り坂で前へ加速する、上り坂で減速する、
+// という向きは、間違えても「それらしく」動いてしまう。
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6TerrainAffectsTheCar,
+	"ZN6.Tick.地形が車に効く",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6TerrainAffectsTheCar::RunTest(const FString& Parameters)
+{
+	// --- 斜面の重力（Python 版と同じ式か）---
+	{
+		double Forward = 0.0;
+		double Left = 0.0;
+		double Scale = 0.0;
+
+		ZN6::BodyGravity(0.0, 0.0, 0.0, Forward, Left, Scale);
+		TestEqual(TEXT("平地では前後の重力成分がゼロ"), Forward, 0.0);
+		TestEqual(TEXT("平地では左右の重力成分がゼロ"), Left, 0.0);
+		TestEqual(TEXT("平地では法線係数が 1"), Scale, 1.0);
+
+		// dz/dx < 0 は「前方が低い」= 下り坂
+		ZN6::BodyGravity(-0.20, 0.0, 0.0, Forward, Left, Scale);
+		TestTrue(*FString::Printf(TEXT("下り坂で前へ加速する（%.3f m/s^2）"), Forward),
+		         Forward > 0.0);
+
+		double UphillForward = 0.0;
+		ZN6::BodyGravity(0.20, 0.0, 0.0, UphillForward, Left, Scale);
+		TestTrue(*FString::Printf(TEXT("上り坂で後ろ向きになる（%.3f m/s^2）"), UphillForward),
+		         UphillForward < 0.0);
+
+		// **保存則。** 面内成分と法線成分を合成すると g に戻る。
+		ZN6::BodyGravity(0.5, 0.3, 0.7, Forward, Left, Scale);
+		const double Tangential = FMath::Sqrt(Forward * Forward + Left * Left);
+		const double Normal = ZN6::GravityMps2 * Scale;
+		TestTrue(
+			*FString::Printf(TEXT("成分を合成すると g に戻る（%.9f）"),
+			                 FMath::Sqrt(Tangential * Tangential + Normal * Normal)),
+			FMath::Abs(FMath::Sqrt(Tangential * Tangential + Normal * Normal)
+			           - ZN6::GravityMps2) < 1e-9);
+	}
+
+	// --- 高さ場 ---
+	const FString HeightfieldPath =
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("../..")) /
+		TEXT("Tracks/Export/heightfield.json");
+
+	ZN6::FHeightfield Field;
+	FString Error;
+	if (!Field.LoadFromFile(HeightfieldPath, Error))
+	{
+		AddError(FString::Printf(TEXT("高さ場を読めない: %s"), *Error));
+		return false;
+	}
+
+	// **走行域は平ら。** 物理が平面3自由度である以上、行ける場所は平面。
+	for (double X = -100.0; X <= 420.0; X += 40.0)
+	{
+		for (double Y = 0.0; Y <= 110.0; Y += 20.0)
+		{
+			const double Height = Field.HeightAt(X, Y);
+			TestTrue(
+				*FString::Printf(TEXT("走行域 (%.0f, %.0f) が平ら（%.4f m）"), X, Y, Height),
+				FMath::Abs(Height + 0.05) < 1e-6);
+		}
+	}
+
+	// 遠景には起伏がある（無ければ「地形に沿う」検査に意味が無い）
+	double Lowest = 1e9;
+	double Highest = -1e9;
+	for (double X = -600.0; X <= 900.0; X += 300.0)
+	{
+		for (double Y = -350.0; Y <= 500.0; Y += 200.0)
+		{
+			const double Height = Field.HeightAt(X, Y);
+			Lowest = FMath::Min(Lowest, Height);
+			Highest = FMath::Max(Highest, Height);
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("遠景に起伏がある（%.2f m）"), Highest - Lowest),
+	         Highest - Lowest > 1.0);
+
+	// --- 車体が地面の高さに乗るか ---
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	const FString ManifestPath =
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("../..")) /
+		TEXT("Vehicles/ZN6/Export/manifest.json");
+	Actor->LoadVisualManifest(ManifestPath, Error);
+
+	if (!Actor->LoadHeightfield(HeightfieldPath, Error))
+	{
+		AddError(FString::Printf(TEXT("Actor が高さ場を読めない: %s"), *Error));
+		DestroyWorld(World);
+		return false;
+	}
+
+	// コース上（平ら）
+	ZN6::FVehicleState OnTrack = Actor->MakeInitialState(0.0, 0);
+	OnTrack.XM = 100.0;
+	OnTrack.YM = 20.0;
+	Actor->SetPhysicsState(OnTrack);
+	Actor->AdvancePhysics(1.0 / 60.0);
+	TestTrue(
+		*FString::Printf(TEXT("コース上では地面が平ら（%.4f m）"),
+		                 Actor->GetGroundHeightM()),
+		FMath::Abs(Actor->GetGroundHeightM() + 0.05) < 1e-3);
+	TestTrue(TEXT("コース上では地形の傾きがゼロ"),
+	         FMath::Abs(Actor->GetTerrainPitchRad()) < 1e-6
+	         && FMath::Abs(Actor->GetTerrainRollRad()) < 1e-6);
+
+	// 起伏の上（**ここで高さが変わらなければ、地形が効いていない**）
+	ZN6::FVehicleState OffTrack = Actor->MakeInitialState(0.0, 0);
+	OffTrack.XM = -500.0;
+	OffTrack.YM = -300.0;
+	Actor->SetPhysicsState(OffTrack);
+	Actor->AdvancePhysics(1.0 / 60.0);
+
+	const double OffHeight = Actor->GetGroundHeightM();
+	TestTrue(
+		*FString::Printf(TEXT("起伏の上では高さが変わる（%.3f m）"), OffHeight),
+		FMath::Abs(OffHeight + 0.05) > 0.2);
+	TestTrue(
+		*FString::Printf(TEXT("起伏の上では車体が傾く（ピッチ %.4f / ロール %.4f rad）"),
+		                 Actor->GetTerrainPitchRad(), Actor->GetTerrainRollRad()),
+		FMath::Abs(Actor->GetTerrainPitchRad())
+		+ FMath::Abs(Actor->GetTerrainRollRad()) > 1e-4);
 
 	DestroyWorld(World);
 	return true;
