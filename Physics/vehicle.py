@@ -33,6 +33,7 @@ from clutch import Clutch
 from differential import OpenDifferential, TorsenDifferential
 from drivetrain import FORWARD_GEARS, Drivetrain
 from engine import Engine
+from setup import CarSetup
 from tire import Tire
 from units import GRAVITY_MPS2, rads_to_rpm, rpm_to_rads
 from vehicle_data import VehicleData
@@ -113,12 +114,19 @@ class VehicleOutputs:
 class Vehicle:
     """ZN6（FR）の平面運動モデル。"""
 
-    def __init__(self, data: VehicleData, use_lsd: bool = True) -> None:
+    def __init__(self, data: VehicleData, use_lsd: bool = True,
+                 setup: "CarSetup" = None) -> None:
         self.data = data
+
+        # **既定は「何も変えない」。** そのときの結果は、セッティング機能を
+        # 入れる前とビット単位で一致する（Tests/test_setup.py で検査）。
+        self.setup = setup if setup is not None else CarSetup()
 
         self.engine = Engine(data)
         self.drivetrain = Drivetrain(data)
         self.brakes = Brakes(data)
+        if self.setup.brake_bias is not None:
+            self.brakes.bias_front = self.setup.brake_bias
         self.clutch = Clutch(data)
         self.aero = Aerodynamics(data)
         self.differential = TorsenDifferential(data) if use_lsd else OpenDifferential()
@@ -128,7 +136,9 @@ class Vehicle:
         self.wheelbase_m = data.value("dimensions.wheelbase", "m")
         self.track_front_m = data.value("dimensions.track_front", "m")
         self.track_rear_m = data.value("dimensions.track_rear", "m")
-        self.cg_height_m = data.value("inertia.cg_height", "m")
+        # 車高を下げれば重心も下がる。**基準値そのものは書き換えない。**
+        self.cg_height_baseline_m = data.value("inertia.cg_height", "m")
+        self.cg_height_m = self.setup.cg_height_m(self.cg_height_baseline_m)
         self.lf_m = data.value("inertia.cg_longitudinal_from_front_axle", "m")
         self.lr_m = self.wheelbase_m - self.lf_m
         self.roll_dist_front = data.value(
@@ -140,7 +150,13 @@ class Vehicle:
         self.idle_omega_rads = rpm_to_rads(data.value("engine.idle_rpm", "1/min"))
 
         weight_n = self.mass_kg * GRAVITY_MPS2
-        self.tire = Tire(data, nominal_load_n=weight_n / 4.0)
+        # **キャンバーを使うときだけ、その係数を読む。**
+        # 常に読むと、キャンバー 0 の走行まで結果の信頼度が
+        # assumed の 0.10 に落ちる（効いていない値で信頼度を下げない）。
+        uses_camber = (self.setup.camber_front_rad != 0.0
+                       or self.setup.camber_rear_rad != 0.0)
+        self.tire = Tire(data, nominal_load_n=weight_n / 4.0,
+                         read_camber=uses_camber)
         self.wheel_radius_m = self.tire.effective_radius_m
         self.static_front_n = weight_n * self.lr_m / self.wheelbase_m
         self.static_rear_n = weight_n * self.lf_m / self.wheelbase_m
@@ -195,14 +211,27 @@ class Vehicle:
 
     # --- スリップ ---------------------------------------------------------
 
+    def wheel_steer_rad(self, wheel: str, steer_rad: float) -> float:
+        """その車輪が向いている角度 [rad]。操舵にトーを足したもの。
+
+        **後輪にも角度が付きうる。** 後輪トーを入れられるようにしてある。
+        既定（トー 0）では後輪はちょうど 0 になり、以前と同じ計算になる。
+        """
+        base = steer_rad if wheel in FRONT_WHEELS else 0.0
+        return base + self.setup.wheel_toe_rad(wheel)
+
     def _wheel_velocity(self, state: VehicleState, wheel: str, steer_rad: float):
         """車輪位置での接地点速度を、車輪座標系で返す。"""
         x, y = self._wheel_position[wheel]
         vx = state.vx_mps - state.yaw_rate_rads * y
         vy = state.vy_mps + state.yaw_rate_rads * x
 
-        if wheel in FRONT_WHEELS:
-            cos_d, sin_d = math.cos(steer_rad), math.sin(steer_rad)
+        # **角度がちょうど 0 なら回さない。** 回転を通すと丸めで最下位
+        # ビットが動きうる。既定のセッティングで以前と完全に一致させる
+        # ため、ここで分岐する。
+        angle = self.wheel_steer_rad(wheel, steer_rad)
+        if angle != 0.0:
+            cos_d, sin_d = math.cos(angle), math.sin(angle)
             vx, vy = vx * cos_d + vy * sin_d, -vx * sin_d + vy * cos_d
         return vx, vy
 
@@ -269,7 +298,8 @@ class Vehicle:
 
             kappa = Tire.slip_ratio(omega, self.wheel_radius_m, vx_w)
             alpha = Tire.slip_angle_rad(vy_w, vx_w)
-            fx_w, fy_w = self.tire.forces_n(fz[wheel], kappa, alpha)
+            camber_lean = self.setup.wheel_camber_lean_rad(wheel)
+            fx_w, fy_w = self.tire.forces_n(fz[wheel], kappa, alpha, camber_lean)
 
             # 転がり抵抗（進行方向と逆）
             if abs(vx_w) > 0.1:
@@ -311,7 +341,7 @@ class Vehicle:
             # 収束していた結果（0-100km/h 等）は動かず、振動していた
             # 領域だけが直る。
             d_fx_d_kappa = self.tire.longitudinal_slope_n_per_slip(
-                fz[wheel], kappa, alpha
+                fz[wheel], kappa, alpha, camber_lean
             )
             d_fx_d_omega = d_fx_d_kappa * self.wheel_radius_m / max(abs(vx_w), 0.5)
             damping = 1.0 + dt_s * self.wheel_radius_m * d_fx_d_omega / inertia
@@ -322,9 +352,11 @@ class Vehicle:
                 omega_new = 0.0
             new_omega[wheel] = omega_new
 
-            # 車輪座標系 -> 車体座標系
-            if wheel in FRONT_WHEELS:
-                cos_d, sin_d = math.cos(control.steer_rad), math.sin(control.steer_rad)
+            # 車輪座標系 -> 車体座標系。**速度を回したのと同じ角度で戻す。**
+            # 別の角度を使うと、力と速度の向きが食い違って仕事が合わなくなる。
+            angle = self.wheel_steer_rad(wheel, control.steer_rad)
+            if angle != 0.0:
+                cos_d, sin_d = math.cos(angle), math.sin(angle)
                 fx_b = fx_w * cos_d - fy_w * sin_d
                 fy_b = fx_w * sin_d + fy_w * cos_d
             else:

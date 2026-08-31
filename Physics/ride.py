@@ -135,9 +135,16 @@ class RideModel:
     既定では `Vehicle` だけが動き、結果は今までと完全に一致する。
     """
 
-    def __init__(self, data) -> None:
+    def __init__(self, data, setup=None) -> None:
+        # **既定は「何も変えない」。** そのときの結果は、セッティング機能を
+        # 入れる前とビット単位で一致する。
+        from setup import CarSetup
+        self.setup = setup if setup is not None else CarSetup()
+
         self.mass_kg = data.value("mass.curb_mass", "kg")
-        self.cg_height_m = data.value("inertia.cg_height", "m")
+        # 車高を下げれば重心も下がる。**基準値そのものは書き換えない。**
+        self.cg_height_m = self.setup.cg_height_m(
+            data.value("inertia.cg_height", "m"))
         self.ixx_kgm2 = data.value("inertia.Ixx", "kg*m^2")
         self.iyy_kgm2 = data.value("inertia.Iyy", "kg*m^2")
 
@@ -172,6 +179,10 @@ class RideModel:
             axle = "front" if wheel in ("FL", "FR") else "rear"
             spring = data.value("suspension.spring_rate_" + axle, "N/m")
             ratio = data.value("suspension.motion_ratio_" + axle, "-")
+
+            # セッティングの倍率。**vehicle.json の min/max を倍率に
+            # 直したものなので、範囲を超えない**（SetupLimits が保証する）。
+            spring *= getattr(self.setup, "spring_scale_" + axle)
 
             # **ホイールレートはモーションレシオの2乗で効く。**
             # 1乗にすると、たわみは合っても力が合わない。
@@ -216,7 +227,8 @@ class RideModel:
         self.damping_n_s_per_m: Dict[str, float] = {}
         for wheel in WHEELS:
             axle = "front" if wheel in ("FL", "FR") else "rear"
-            zeta = data.value("suspension.damping_ratio_" + axle, "-")
+            zeta = (data.value("suspension.damping_ratio_" + axle, "-")
+                    * getattr(self.setup, "damping_scale_" + axle))
             corner_mass = self.static_load_n[wheel] / GRAVITY_MPS2
             self.damping_n_s_per_m[wheel] = (
                 2.0 * zeta * math.sqrt(self.ride_rate_n_per_m[wheel] * corner_mass))

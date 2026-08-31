@@ -24,7 +24,8 @@ from vehicle_data import VehicleData
 
 
 class Tire:
-    def __init__(self, data: VehicleData, nominal_load_n: float) -> None:
+    def __init__(self, data: VehicleData, nominal_load_n: float,
+                 read_camber: bool = False) -> None:
         self.mu0 = data.value("tires.friction_coefficient", "-")
         self.load_sensitivity_per_n = data.value("tires.load_sensitivity", "1/N")
         self.cornering_stiffness_per_load = data.value(
@@ -32,6 +33,19 @@ class Tire:
         )
         self.longitudinal_stiffness_per_load = data.value(
             "tires.longitudinal_stiffness_per_load", "-"
+        )
+        # キャンバー推力の係数。**キャンバーを使うときだけ読む。**
+        #
+        # `VehicleData` は読んだ全パラメータの confidence を記録し、結果の
+        # 信頼度をその最小値で頭打ちにする。この項目は assumed / 0.10 なので、
+        # **常に読むとキャンバー 0 の走行まで信頼度 0.10 に落ちる。**
+        # 効いていないパラメータで信頼度を下げるのは、依存関係の嘘になる。
+        #
+        # 使わないときは None にしておき、**それでキャンバーを渡されたら
+        # 止まる**（黙って 0 として扱わない）。
+        self.camber_stiffness_per_load = (
+            data.value("tires.camber_stiffness_per_load", "1/rad")
+            if read_camber else None
         )
         self.effective_radius_m = data.value("tires.effective_radius", "m")
         self.nominal_load_n = nominal_load_n
@@ -55,7 +69,8 @@ class Tire:
     # --- 力 ---------------------------------------------------------------
 
     def forces_n(
-        self, fz_n: float, slip_ratio: float, slip_angle_rad: float
+        self, fz_n: float, slip_ratio: float, slip_angle_rad: float,
+        camber_lean_rad: float = 0.0,
     ) -> Tuple[float, float]:
         """(縦力 Fx, 横力 Fy) [N] を返す。
 
@@ -81,6 +96,21 @@ class Tire:
         fx_linear = c_kappa * slip_ratio
         fy_linear = -c_alpha * math.tan(slip_angle_rad)
 
+        # キャンバー推力。**倒れた向きへ押す。**
+        #
+        # 飽和の前に足すので摩擦円を共有する（キャンバーで得た横力も
+        # 限界を消費する）。後から足すと**摩擦円を超える横力が出る。**
+        #
+        # `camber_lean_rad` は車体座標系の傾き（正が左倒し）で、
+        # 自動車の慣習のキャンバー角ではない。左右で符号が変わるので、
+        # 変換は `setup.CarSetup.wheel_camber_lean_rad` が持っている。
+        if camber_lean_rad != 0.0:
+            if self.camber_stiffness_per_load is None:
+                raise ValueError(
+                    "キャンバーを渡されたが camber_stiffness_per_load を"
+                    "読んでいない。Tire(..., read_camber=True) で作ること")
+            fy_linear += self.camber_stiffness_per_load * fz_n * camber_lean_rad
+
         f_linear = math.hypot(fx_linear, fy_linear)
         if f_linear < 1e-9:
             return 0.0, 0.0
@@ -95,7 +125,8 @@ class Tire:
         return fx_linear * scale, fy_linear * scale
 
     def longitudinal_slope_n_per_slip(
-        self, fz_n: float, slip_ratio: float, slip_angle_rad: float
+        self, fz_n: float, slip_ratio: float, slip_angle_rad: float,
+        camber_lean_rad: float = 0.0,
     ) -> float:
         """その動作点での dFx/dkappa [N]（接線剛性）。
 
@@ -126,6 +157,17 @@ class Tire:
 
         fx_linear = c_kappa * slip_ratio
         fy_linear = -c_alpha * math.tan(slip_angle_rad)
+
+        # **forces_n と同じ動作点で微分すること。** ここでキャンバーを
+        # 落とすと、力と接線剛性が別の点の値になり、半陰的な積分の
+        # 減衰が合わなくなる。
+        if camber_lean_rad != 0.0:
+            if self.camber_stiffness_per_load is None:
+                raise ValueError(
+                    "キャンバーを渡されたが camber_stiffness_per_load を"
+                    "読んでいない。Tire(..., read_camber=True) で作ること")
+            fy_linear += self.camber_stiffness_per_load * fz_n * camber_lean_rad
+
         f_linear = math.hypot(fx_linear, fy_linear)
 
         z = f_linear / (3.0 * f_max)

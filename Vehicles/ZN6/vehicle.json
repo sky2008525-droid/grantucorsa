@@ -1025,6 +1025,17 @@
       "confidence": 0.25,
       "note": "正規化コーナリング剛性 C_alpha / Fz [1/rad]。Fiala モデルの入力。街乗りタイヤは 10-18、ハイグリップは 20 以上。"
     },
+    "camber_stiffness_per_load": {
+      "value": 1.2,
+      "min": 0.6,
+      "max": 2.5,
+      "unit": "1/rad",
+      "source": "assumed",
+      "method": "assumed_fraction_of_cornering_stiffness",
+      "confidence": 0.1,
+      "note": "キャンバー推力の係数。荷重あたりの横力で、Fy += この値 * Fz * 傾き角。**実測していない。** キャンバー剛性はコーナリング剛性の 1/5〜1/10 程度という一般論だけを根拠にしている（14.0 の約 1/12）。セッティング画面でキャンバーを動かせるようにするために要る項目で、既定のセッティング（キャンバー 0）では結果に一切影響しない。",
+      "WARNING": "実測値ではない。キャンバーを 0 以外にした結果は検証に使えない。"
+    },
     "model_parameters": "unknown"
   },
   "aerodynamics": {
