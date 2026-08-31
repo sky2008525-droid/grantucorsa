@@ -133,13 +133,101 @@ namespace ZN6
 		/** その荷重で出せる縦力の上限 [N]（摩擦円の半径）。 */
 		double MaxLongitudinalForceN(double FzN) const;
 
+		/**
+		 * (縦力 Fx, 横力 Fy) [N]。ブラシモデルの飽和則。
+		 *
+		 *   F = mu*Fz * (3z - 3z^2 + z^3)   (z = F_linear / (3*mu*Fz) <= 1)
+		 *   F = mu*Fz                        (z > 1)
+		 *
+		 * 力の向きは線形力のベクトル方向を保つので、**摩擦円の拘束が縦横で
+		 * 自動的に共有される**（これが複合スリップ）。FR では後輪の複合
+		 * スリップがパワーオーバーステアの発生条件そのもの。
+		 */
+		void ForcesN(double FzN, double SlipRatio, double SlipAngleRad,
+		             double& OutFxN, double& OutFyN) const;
+
+		/** スリップ率 kappa = (omega*r - v) / max(|v|, 0.5)。駆動時は正。 */
+		static double SlipRatio(double WheelOmegaRads, double RadiusM, double ContactSpeedMps);
+
+		/** スリップ角 alpha = atan2(vy, max(|vx|, 0.5))。 */
+		static double SlipAngleRad(double LateralSpeedMps, double LongitudinalSpeedMps);
+
 		double GetEffectiveRadiusM() const { return EffectiveRadiusM; }
 
 	private:
 		double Mu0 = 0.0;
 		double LoadSensitivityPerN = 0.0;
+		double CorneringStiffnessPerLoad = 0.0;
+		double LongitudinalStiffnessPerLoad = 0.0;
 		double EffectiveRadiusM = 0.0;
 		double NominalLoadN = 0.0;
+	};
+
+	// -----------------------------------------------------------------------
+	// クラッチ（滑りを持つ）
+	// -----------------------------------------------------------------------
+	//
+	// **bool の断続ではなく、回転差に応じてトルクを伝えるモデル。**
+	// これが無いとクラッチ蹴り・半クラッチ発進・エンストが表現できない。
+	class FClutch
+	{
+	public:
+		bool Init(FVehicleData& Data, FString& OutError);
+		double GetCapacityNm() const { return CapacityNm; }
+
+	private:
+		double CapacityNm = 0.0;
+	};
+
+	// -----------------------------------------------------------------------
+	// ブレーキ
+	// -----------------------------------------------------------------------
+	//
+	// ディスク径・マスターシリンダー径・パッド摩擦係数はいずれも unknown の
+	// ため、油圧系からブレーキトルクを導けない。代わりに **総容量と前後配分**
+	// で扱う。実車のブレーキはタイヤの摩擦限界を上回る能力を持つように
+	// 設計されるので、**制動距離を決めるのはブレーキ容量ではなくタイヤ mu**。
+	class FBrakes
+	{
+	public:
+		bool Init(FVehicleData& Data, FString& OutError);
+
+		/** (前軸合計, 後軸合計) のブレーキトルク [N*m]（正の値）。 */
+		void AxleTorquesNm(double Pedal, double& OutFrontNm, double& OutRearNm) const;
+
+		/**
+		 * サイドブレーキによる**後軸のみ**のブレーキトルク [N*m]。
+		 * 後輪だけをロックさせるため、後輪の横力が消えて車が回り始める。
+		 */
+		double HandbrakeAxleTorqueNm(double Lever) const;
+
+	private:
+		double BiasFront = 0.0;
+		double MaxTotalTorqueNm = 0.0;
+		double HandbrakeTorqueNm = 0.0;
+	};
+
+	// -----------------------------------------------------------------------
+	// デファレンシャル
+	// -----------------------------------------------------------------------
+	//
+	// 基準車両の GT はトルセンLSD を標準装備する。FR + LSD の効き方は FF と
+	// 逆向きで、コーナー脱出のパワーオンで**内輪から外輪へトルクが移り、
+	// オーバーステアを助長する**。Open Diff は比較基準としてのみ残す。
+	class FDifferential
+	{
+	public:
+		bool Init(FVehicleData& Data, bool bInUseLsd, FString& OutError);
+
+		/** (左, 右) へのトルク配分 [N*m]。 */
+		void SplitTorqueNm(double TotalTorqueNm, double OmegaLeftRads, double OmegaRightRads,
+		                   double& OutLeftNm, double& OutRightNm) const;
+
+	private:
+		bool bUseLsd = true;
+		double PreloadNm = 0.0;
+		double AccelLockRatio = 0.0;
+		double DecelLockRatio = 0.0;
 	};
 
 	// -----------------------------------------------------------------------
