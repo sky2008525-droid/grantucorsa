@@ -146,6 +146,11 @@ namespace ZN6
 		double GetConfidence() const { return Confidence; }
 		bool IsValidatable() const { return bValidatable; }
 
+		// **当たり判定が使う。** 質量と慣性を当たり判定側で持たせると、
+		// vehicle.json とずれた値で衝突を解くことになる。
+		double GetMassKg() const { return MassKg; }
+		double GetIzzKgm2() const { return IzzKgm2; }
+
 	private:
 		/** 車輪位置での接地点速度を、車輪座標系で返す。 */
 		void WheelVelocity(const FVehicleState& State, int32 WheelIndex, double SteerRad,

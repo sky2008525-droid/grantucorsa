@@ -134,6 +134,15 @@ void AZN6VehicleActor::BeginPlay()
 		UE_LOG(LogTemp, Warning,
 		       TEXT("ZN6: 地形を読めない: %s。平地として走る。"), *Error);
 	}
+
+	// 障害物。**読めなければ当たり判定なしで走る。**
+	// 木をすり抜けるのは明らかに分かるが、でっち上げた境界に阻まれるのは
+	// 原因が分からない。
+	if (!LoadObstacles(RepoRoot / TEXT("Tracks/Export/placement.json"), Error))
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: 障害物を読めない: %s。当たり判定なしで走る。"), *Error);
+	}
 }
 
 bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString& OutError)
@@ -205,6 +214,24 @@ bool AZN6VehicleActor::LoadHeightfield(const FString& HeightfieldPath, FString& 
 {
 	bHeightfieldLoaded = Heightfield.LoadFromFile(HeightfieldPath, OutError);
 	return bHeightfieldLoaded;
+}
+
+bool AZN6VehicleActor::LoadObstacles(const FString& PlacementPath, FString& OutError)
+{
+	bObstaclesLoaded = false;
+
+	// **車体の外形が先。** これが作れないなら当たり判定は成立しない。
+	if (!CollisionBody.Init(VehicleData, OutError))
+	{
+		return false;
+	}
+	if (!Obstacles.LoadFromPlacement(PlacementPath, OutError))
+	{
+		return false;
+	}
+
+	bObstaclesLoaded = true;
+	return true;
 }
 
 void AZN6VehicleActor::SampleGround()
@@ -339,6 +366,15 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 		Vehicle.Step(PhysicsState, Control, FixedStep, NextState, PhysicsOutputs,
 		             SlopeGxMps2, SlopeGyMps2, NormalScale);
 		PhysicsState = NextState;
+
+		// **当たり判定は Step の後。** 触れていなければ状態は変わらないので、
+		// 障害物の無い走行の結果は当たり判定を入れる前と一致する。
+		if (bObstaclesLoaded)
+		{
+			ContactCount = Obstacles.Resolve(PhysicsState, CollisionBody,
+			                                 Vehicle.GetMassKg(), Vehicle.GetIzzKgm2());
+		}
+
 		SimulatedTimeS += FixedStep;
 		++TotalStepCount;
 

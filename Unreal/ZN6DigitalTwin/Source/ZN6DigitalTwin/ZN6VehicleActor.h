@@ -16,6 +16,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "Physics/ZN6Obstacles.h"
 #include "Physics/ZN6Terrain.h"
 #include "Physics/ZN6Vehicle.h"
 #include "ZN6VehicleActor.generated.h"
@@ -207,6 +208,18 @@ public:
 	 */
 	bool LoadHeightfield(const FString& HeightfieldPath, FString& OutError);
 
+	/**
+	 * 樹木と世界境界の当たり判定を読む。
+	 *
+	 * **読むのは配置データ（placement.json）であって、樹木メッシュの
+	 * コリジョンではない**（憲法ルール4）。読めなければ当たり判定なしで
+	 * 走る。地形と同じく、既定値をでっち上げない。
+	 */
+	bool LoadObstacles(const FString& PlacementPath, FString& OutError);
+
+	/** 直近のステップで接触した障害物の数。**0 なら何も触れていない。** */
+	int32 GetContactCount() const { return ContactCount; }
+
 	/** 車体が乗っている地面の高さ [m]（4輪の接地点の平均）。 */
 	double GetGroundHeightM() const { return GroundHeightM; }
 
@@ -389,6 +402,12 @@ private:
 
 	ZN6::FHeightfield Heightfield;
 	bool bHeightfieldLoaded = false;
+
+	/** 障害物。**Vehicle.Step の後**に解く。 */
+	ZN6::FObstacleField Obstacles;
+	ZN6::FCollisionBody CollisionBody;
+	bool bObstaclesLoaded = false;
+	int32 ContactCount = 0;
 
 	/** 接地面の状態。SampleGround が更新する。 */
 	double GroundHeightM = 0.0;
