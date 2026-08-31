@@ -868,6 +868,98 @@ bool FZN6TerrainAffectsTheCar::RunTest(const FString& Parameters)
 		FMath::Abs(Actor->GetTerrainPitchRad())
 		+ FMath::Abs(Actor->GetTerrainRollRad()) > 1e-4);
 
+	// --- 傾きの「向き」を検査する ------------------------------------------
+	//
+	// **大きさだけを見ていたせいで、上り坂で機首が下がっていた。**
+	// 上の検査は「傾きがゼロでない」しか言っていないので、符号を逆に
+	// しても通ってしまう（実際に通っていた）。
+	//
+	// ロールでも同じ間違いをしている（`AdvanceVisualAttitude` のコメント）。
+	// **向きのあるものは、大きさではなく向きを検査すること。**
+	{
+		// 傾斜のはっきりした場所を高さ場から探す。**座標を書き写さない。**
+		// 地形を作り直したときに、テストだけ古い場所を見続けるのを避ける。
+		double ProbeX = 0.0;
+		double ProbeY = 0.0;
+		double ProbeDzDx = 0.0;
+		double ProbeDzDy = 0.0;
+		bool bFound = false;
+
+		for (double X = -500.0; X <= 800.0 && !bFound; X += 20.0)
+		{
+			for (double Y = -400.0; Y <= 500.0 && !bFound; Y += 20.0)
+			{
+				double DzDx = 0.0;
+				double DzDy = 0.0;
+				Field.SlopeAt(X, Y, DzDx, DzDy);
+				// 前後・左右のどちらの符号もはっきりしている場所を選ぶ
+				if (FMath::Abs(DzDx) > 0.05 && FMath::Abs(DzDy) > 0.05)
+				{
+					ProbeX = X;
+					ProbeY = Y;
+					ProbeDzDx = DzDx;
+					ProbeDzDy = DzDy;
+					bFound = true;
+				}
+			}
+		}
+
+		if (!bFound)
+		{
+			AddError(TEXT("傾斜のはっきりした場所が高さ場に無い"));
+			DestroyWorld(World);
+			return false;
+		}
+
+		AddInfo(FString::Printf(TEXT("傾斜の検査地点 (%.0f, %.0f) dz/dx=%.4f dz/dy=%.4f"),
+		                        ProbeX, ProbeY, ProbeDzDx, ProbeDzDy));
+
+		auto SampleAt = [&](double HeadingRad)
+		{
+			ZN6::FVehicleState Slope = Actor->MakeInitialState(0.0, 0);
+			Slope.XM = ProbeX;
+			Slope.YM = ProbeY;
+			Slope.HeadingRad = HeadingRad;
+			Actor->SetPhysicsState(Slope);
+			Actor->AdvancePhysics(1.0 / 60.0);
+		};
+
+		// --- ピッチ ---
+		//
+		// 向き 0（+X を向く）で dz/dx > 0 なら、前が高い = 上り坂。
+		// **上り坂では機首が上がる**（UE の正のピッチ）。
+		SampleAt(0.0);
+		const double UphillPitch = ProbeDzDx > 0.0
+			? Actor->GetTerrainPitchRad() : -Actor->GetTerrainPitchRad();
+		TestTrue(
+			*FString::Printf(
+				TEXT("上り坂で機首が上がる（ピッチ %.5f rad / dz/dx %.4f）"),
+				Actor->GetTerrainPitchRad(), ProbeDzDx),
+			UphillPitch > 1e-4);
+
+		// 同じ場所で逆を向けば下り坂になる。**符号が反転すること。**
+		SampleAt(ZN6::Pi);
+		const double DownhillPitch = ProbeDzDx > 0.0
+			? Actor->GetTerrainPitchRad() : -Actor->GetTerrainPitchRad();
+		TestTrue(
+			*FString::Printf(TEXT("向きを反転すると下り坂になる（ピッチ %.5f rad）"),
+			                 Actor->GetTerrainPitchRad()),
+			DownhillPitch < -1e-4);
+
+		// --- ロール ---
+		//
+		// 向き 0 なら車の左は +Y。dz/dy > 0 は左の地面が高いということ。
+		// **左が高ければ右側が下がる**（UE の正のロールは右下がり）。
+		SampleAt(0.0);
+		const double LeftHighRoll = ProbeDzDy > 0.0
+			? Actor->GetTerrainRollRad() : -Actor->GetTerrainRollRad();
+		TestTrue(
+			*FString::Printf(
+				TEXT("左の地面が高ければ右へ傾く（ロール %.5f rad / dz/dy %.4f）"),
+				Actor->GetTerrainRollRad(), ProbeDzDy),
+			LeftHighRoll > 1e-4);
+	}
+
 	DestroyWorld(World);
 	return true;
 }

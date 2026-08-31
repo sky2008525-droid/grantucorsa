@@ -305,7 +305,15 @@ void AZN6VehicleActor::SampleGround()
 	GroundHeightM = (Height[FL] + Height[FR] + Height[RL] + Height[RR]) / 4.0;
 
 	// 前後・左右の高さ差から車体の傾きを出す。
-	// **後ろが低ければ機首上げ**（ピッチ正）。
+	//
+	// **UE の正のピッチは機首上げ**（FRotator(90,0,0).Vector() == (0,0,1)）。
+	// 上り坂では前輪の下の地面が高いので FrontZ > RearZ、そのとき機首は
+	// 上がる。したがって FrontZ - RearZ をそのまま使う。
+	//
+	// ここは以前 RearZ - FrontZ になっていて、**上り坂で機首が下がっていた。**
+	// テストは「傾きがゼロでない」しか見ておらず、符号を検査していなかった
+	// ため通っていた。ロールで同じ間違いをした直後に、ピッチで繰り返している。
+	// **向きのあるものは、大きさではなく向きを検査すること。**
 	const double FrontZ = (Height[FL] + Height[FR]) / 2.0;
 	const double RearZ = (Height[RL] + Height[RR]) / 2.0;
 	const double LeftZ = (Height[FL] + Height[RL]) / 2.0;
@@ -316,7 +324,7 @@ void AZN6VehicleActor::SampleGround()
 	const double TrackM = FMath::Max(
 		WheelAttachM[FL].Y - WheelAttachM[FR].Y, 0.1);
 
-	TerrainPitchRad = FMath::Atan2(RearZ - FrontZ, WheelbaseM);
+	TerrainPitchRad = FMath::Atan2(FrontZ - RearZ, WheelbaseM);
 	// **左が高ければ右へ傾く**（UE の正のロールは右下がり）。
 	TerrainRollRad = FMath::Atan2(LeftZ - RightZ, TrackM);
 
