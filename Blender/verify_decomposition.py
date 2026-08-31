@@ -38,9 +38,14 @@ def clear_scene():
     bpy.ops.object.delete(use_global=False)
 
 
-def import_fbx(path):
+def import_part(path):
+    """書き出した部品を読み込む。
+
+    **形式は decompose_vehicle.py に合わせること。** FBX から glTF へ
+    変えたとき、ここを直し忘れて「Invalid header」で落ちた。
+    """
     before = set(bpy.data.objects.keys())
-    bpy.ops.import_scene.fbx(filepath=path, axis_forward="X", axis_up="Z")
+    bpy.ops.import_scene.gltf(filepath=path)
     return [bpy.data.objects[n] for n in bpy.data.objects.keys() if n not in before]
 
 
@@ -121,13 +126,13 @@ def main():
 
     clear_scene()
 
-    body_objs = import_fbx(os.path.join(export_dir, manifest["parts"]["body"]["file"]))
+    body_objs = import_part(os.path.join(export_dir, manifest["parts"]["body"]["file"]))
     print("[verify] body objects: %d" % len(body_objs))
 
     wheel_objs = {}
     for name in WHEELS:
         spec = manifest["parts"]["wheel_%s" % name]
-        objs = import_fbx(os.path.join(export_dir, spec["file"]))
+        objs = import_part(os.path.join(export_dir, spec["file"]))
         if len(objs) != 1:
             print("[verify] !! %s のインポート結果が1つでない (%d)" % (name, len(objs)))
         wheel = objs[0]
