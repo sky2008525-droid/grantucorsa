@@ -23,6 +23,13 @@ import argparse
 import json
 import sys
 
+# Windows のコンソールは既定で cp932 になっており、警告メッセージ中の全角ダッシュ等を
+# 出力できずに UnicodeEncodeError でクラッシュする（エラー内容を隠す最悪の失敗の仕方）。
+# git フックからの呼び出しも含めて必ず通る経路なので、ここで一度だけ矯正する。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 # ---------------------------------------------------------------------------
 # 憲法の定義（Docs/SPEC_ZN6.md §5.2）
 # ---------------------------------------------------------------------------
