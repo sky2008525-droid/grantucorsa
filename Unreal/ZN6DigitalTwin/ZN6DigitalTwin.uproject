@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "grantucorsa — ZN6 Digital Twin — Phase 8 UE5 integration",
+	"Modules": [
+		{
+			"Name": "ZN6DigitalTwin",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}
