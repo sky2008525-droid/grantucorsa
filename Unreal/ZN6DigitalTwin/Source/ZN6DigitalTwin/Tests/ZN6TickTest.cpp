@@ -51,6 +51,12 @@ namespace
 			Test.AddError(FString::Printf(TEXT("物理モデルを初期化できない: %s"), *Error));
 			return nullptr;
 		}
+
+		// **走れる状態にしてから返す。**
+		// 既定はメニューで、そこでは操作を受け付けない（カウントダウン前に
+		// 走り出さないため）。ここを忘れると「アクセルを踏んでも進まない」
+		// テストが落ちる。スタートの門そのものは ZN6.Race で検査する。
+		Actor->StartFreeRun();
 		return Actor;
 	}
 

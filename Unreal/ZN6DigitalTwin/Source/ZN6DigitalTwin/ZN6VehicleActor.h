@@ -17,6 +17,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
 #include "Audio/ZN6VehicleAudioComponent.h"
+#include "Game/ZN6RaceDirector.h"
 #include "Physics/ZN6Obstacles.h"
 #include "Physics/ZN6Ride.h"
 #include "Physics/ZN6Track.h"
@@ -236,6 +237,35 @@ public:
 	/** 路面の端までの符号つき距離 [m]。内側が正。音のクロスフェードに使う。 */
 	double GetDistanceToTrackEdgeM() const;
 
+	/** コース定義を読む。**周回計測とミニマップと音のクロスフェードに使う。** */
+	bool LoadTrack(const FString& TrackJsonPath, FString& OutError);
+
+	const ZN6::FTrackEdge& GetTrack() const { return TrackEdge; }
+	bool IsTrackLoaded() const { return bTrackEdgeLoaded; }
+
+	// --- セッションの進行 ---------------------------------------------------
+	//
+	// **ここは物理ではない。** 時間を測って状態を切り替えるだけ。
+
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	bool StartCountdown() { return Race.StartCountdown(); }
+
+	/** カウントダウン無しで走り出す（フリー走行）。 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	bool StartFreeRun() { return Race.StartFreeRun(); }
+
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	bool PauseRace() { return Race.Pause(); }
+
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	bool ResumeRace() { return Race.Resume(); }
+
+	/** メニューへ戻す。**車も出発点へ戻す。** */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	void ReturnToMenu();
+
+	const ZN6::FRaceDirector& GetRace() const { return Race; }
+
 	/** 車体が乗っている地面の高さ [m]（4輪の接地点の平均）。 */
 	double GetGroundHeightM() const { return GroundHeightM; }
 
@@ -451,9 +481,15 @@ private:
 	ZN6::FHeightfield Heightfield;
 	bool bHeightfieldLoaded = false;
 
-	/** コース中心線。**音のクロスフェードに使う。物理へは返さない。** */
+	/**
+	 * コース中心線。**物理へは返さない。**
+	 * 音のクロスフェード・周回計測・ミニマップが読む。
+	 */
 	ZN6::FTrackEdge TrackEdge;
 	bool bTrackEdgeLoaded = false;
+
+	/** セッションの進行役。**物理には触らない。** */
+	ZN6::FRaceDirector Race;
 
 	/**
 	 * 音。**物理の後に更新する。**

@@ -36,10 +36,45 @@ namespace ZN6
 		 */
 		double DistanceToEdgeM(double XM, double YM) const;
 
+		/**
+		 * コース上の位置。周回判定とミニマップに使う。
+		 *
+		 * @param OutSM        スタートからの道のり [m]
+		 * @param OutLateralM  中心線からの横ずれ [m]。**左が正**
+		 * @return 中心線までの距離 [m]
+		 */
+		double NearestPoint(double XM, double YM, double& OutSM,
+		                    double& OutLateralM) const;
+
+		/** コース1周の長さ [m]。 */
+		double LengthM() const { return TrackLengthM; }
+
+		/** 中心線の点（ミニマップの描画に使う）。 */
+		int32 CentrelineCount() const { return PointsX.Num(); }
+		void CentrelinePoint(int32 Index, double& OutXM, double& OutYM) const
+		{
+			OutXM = PointsX[Index];
+			OutYM = PointsY[Index];
+		}
+
+		/** 中心線を囲む矩形 [m]。ミニマップの縮尺に使う。 */
+		void Bounds(double& OutMinX, double& OutMaxX,
+		            double& OutMinY, double& OutMaxY) const
+		{
+			OutMinX = MinXM; OutMaxX = MaxXM;
+			OutMinY = MinYM; OutMaxY = MaxYM;
+		}
+
 	private:
 		bool bLoaded = false;
 		TArray<double> PointsX;
 		TArray<double> PointsY;
+		TArray<double> PointsS;
 		double TrackWidthM = 0.0;
+		double TrackLengthM = 0.0;
+		double MinXM = 0.0;
+		double MaxXM = 0.0;
+		double MinYM = 0.0;
+		double MaxYM = 0.0;
 	};
 }

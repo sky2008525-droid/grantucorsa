@@ -139,6 +139,14 @@ void AZN6VehicleActor::BeginPlay()
 		       TEXT("ZN6: 地形を読めない: %s。平地として走る。"), *Error);
 	}
 
+	// コース定義。**周回計測・ミニマップ・音の混合が読む。**
+	if (!LoadTrack(RepoRoot / TEXT("Tracks/physics_test_track.json"), Error))
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: コース定義を読めない: %s。計測とミニマップが働かない。"),
+		       *Error);
+	}
+
 	// 音。**鳴らなくても走りは変わらない。**
 	if (!InitialiseAudio(RepoRoot, Error))
 	{
@@ -242,20 +250,25 @@ bool AZN6VehicleActor::LoadHeightfield(const FString& HeightfieldPath, FString& 
 	return bHeightfieldLoaded;
 }
 
+bool AZN6VehicleActor::LoadTrack(const FString& TrackJsonPath, FString& OutError)
+{
+	// **音だけのものではなくなった。** 周回計測もミニマップもここを読む。
+	// 読めなければ、音の混合も計測も働かない（でっち上げない）。
+	bTrackEdgeLoaded = TrackEdge.LoadFromFile(TrackJsonPath, OutError);
+
+	ZN6::FRaceRules Rules;
+	Race.Init(bTrackEdgeLoaded ? &TrackEdge : nullptr, Rules);
+	return bTrackEdgeLoaded;
+}
+
+void AZN6VehicleActor::ReturnToMenu()
+{
+	Race.Reset();
+	ResetToStart();
+}
+
 bool AZN6VehicleActor::InitialiseAudio(const FString& RepoRoot, FString& OutError)
 {
-	// コース中心線。**音のクロスフェードにしか使わない。**
-	// 読めなければ距離 0（境界の真上）として扱われ、路面が半々に混ざる。
-	FString TrackError;
-	bTrackEdgeLoaded = TrackEdge.LoadFromFile(
-		RepoRoot / TEXT("Tracks/physics_test_track.json"), TrackError);
-	if (!bTrackEdgeLoaded)
-	{
-		UE_LOG(LogTemp, Warning,
-		       TEXT("ZN6: コース中心線を読めない: %s。路面の混合が働かない。"),
-		       *TrackError);
-	}
-
 	if (Audio == nullptr)
 	{
 		OutError = TEXT("音のコンポーネントが無い");
@@ -484,6 +497,11 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 			          NextRide, RideOutputs);
 			RideState = NextRide;
 		}
+
+		// **セッションの進行は物理の後。** 物理の固定刻みで時間を測るので、
+		// 描画が重い日でもラップタイムが変わらない。
+		Race.Advance(FixedStep, PhysicsState.XM, PhysicsState.YM,
+		             PhysicsState.SpeedMps());
 
 		SimulatedTimeS += FixedStep;
 		++TotalStepCount;
@@ -764,11 +782,20 @@ void AZN6VehicleActor::ApplyDriverInput(float DeltaSeconds)
 			: Current + FMath::Sign(Target - Current) * Step;
 	};
 
+	// **カウントダウン中・一時停止中は操作を渡さない。**
+	//
+	// 物理を止めるのではなく入力を 0 にする。物理から見れば「踏んでいない」
+	// のと同じで、モデルには何も足していない（憲法ルール18）。
+	// 止めてしまうと、スタート前に車が坂を転がることさえ再現できなくなる。
+	const float Gate = static_cast<float>(Race.InputScale());
+
 	const float PedalRate = DriverFeel.PedalRatePerS;
 	Control.Throttle = Approach(static_cast<float>(Control.Throttle),
-	                            FMath::Clamp(RawThrottle, 0.0f, 1.0f), PedalRate);
+	                            Gate * FMath::Clamp(RawThrottle, 0.0f, 1.0f),
+	                            PedalRate);
 	Control.Brake = Approach(static_cast<float>(Control.Brake),
-	                         FMath::Clamp(RawBrake, 0.0f, 1.0f), PedalRate);
+	                         Gate * FMath::Clamp(RawBrake, 0.0f, 1.0f),
+	                         PedalRate);
 
 	// クラッチは踏むと切れる（0 = 切、1 = 繋）。**入力の意味を反転させる。**
 	Control.Clutch = 1.0 - FMath::Clamp(RawClutch, 0.0f, 1.0f);
@@ -783,7 +810,7 @@ void AZN6VehicleActor::ApplyDriverInput(float DeltaSeconds)
 	const double Falloff = 1.0 / (1.0 + DriverFeel.SteerSpeedFalloffPerMps * SpeedMps);
 	const double SteerLimit = MaxSteerRad * Falloff;
 
-	const float Target = FMath::Clamp(RawSteer, -1.0f, 1.0f);
+	const float Target = Gate * FMath::Clamp(RawSteer, -1.0f, 1.0f);
 	const bool bReturning = FMath::IsNearlyZero(Target);
 	const float Rate = bReturning
 		? DriverFeel.SteerReturnRateRadPerS
