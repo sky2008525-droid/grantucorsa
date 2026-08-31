@@ -1,9 +1,14 @@
 #include "ZN6VehicleActor.h"
 
+#include "Camera/CameraComponent.h"
+#include "Components/InputComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Dom/JsonObject.h"
+#include "Engine/Engine.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Physics/ZN6Units.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
@@ -71,6 +76,28 @@ AZN6VehicleActor::AZN6VehicleActor()
 	{
 		WheelMeshes.Add(MakeVisualMesh(WheelComponentNames[Index]));
 	}
+
+	// --- 追従カメラ。**描画専用。** ---------------------------------------
+	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
+	CameraBoom->SetupAttachment(Root);
+	CameraBoom->TargetArmLength = 750.0f;
+	CameraBoom->SocketOffset = FVector(0.0f, 0.0f, 220.0f);
+	CameraBoom->bDoCollisionTest = false;   // 木や地面にカメラを寄せない
+	// **車体の回転に少し遅れて追従させる。** 完全追従だと、スピン時に
+	// world が回って見えて何が起きているか分からない。
+	CameraBoom->bEnableCameraRotationLag = true;
+	CameraBoom->CameraRotationLagSpeed = 6.0f;
+	CameraBoom->bInheritPitch = false;
+	CameraBoom->bInheritRoll = false;
+
+	ChaseCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("ChaseCamera"));
+	ChaseCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+
+	// この Pawn は UE の移動コンポーネントを持たない。
+	// **位置は物理モデルだけが決める。**
+	bUseControllerRotationYaw = false;
+	bUseControllerRotationPitch = false;
+	bUseControllerRotationRoll = false;
 }
 
 void AZN6VehicleActor::BeginPlay()
@@ -113,6 +140,27 @@ bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString
 		return false;
 	}
 
+	// 最大舵角を最小回転半径から導く。**読めなければ 0 のままにする。**
+	// 「それらしい既定値」を置くと、操舵が効いているのに実車と無関係な
+	// 値で走ることになる（憲法ルール1）。
+	double TurningRadiusM = 0.0;
+	double WheelbaseM = 0.0;
+	FString SteerError;
+	if (VehicleData.GetValue(TEXT("dimensions.min_turning_radius"), TEXT("m"),
+	                         TurningRadiusM, SteerError)
+	    && VehicleData.GetValue(TEXT("dimensions.wheelbase"), TEXT("m"),
+	                            WheelbaseM, SteerError)
+	    && TurningRadiusM > 0.0)
+	{
+		MaxSteerRad = FMath::Atan2(WheelbaseM, TurningRadiusM);
+	}
+	else
+	{
+		MaxSteerRad = 0.0;
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: 最大舵角を導けない（%s）。操舵は効かない。"), *SteerError);
+	}
+
 	PhysicsState = Vehicle.InitialState(0.0, 0);
 	SimulatedTimeS = 0.0;
 	TotalStepCount = 0;
@@ -124,6 +172,24 @@ bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString
 	}
 	bPhysicsReady = true;
 	return true;
+}
+
+void AZN6VehicleActor::ResetToStart()
+{
+	if (!bPhysicsReady)
+	{
+		return;
+	}
+
+	PhysicsState = Vehicle.InitialState(0.0, 0);
+	Control = ZN6::FControlInput();
+	RawThrottle = RawBrake = RawSteer = RawClutch = RawHandbrake = 0.0f;
+	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+	{
+		VisualWheelAngleRad[Index] = 0.0;
+	}
+	Accumulator.AccumulatedS = 0.0;
+	SyncVisualToPhysics();
 }
 
 bool AZN6VehicleActor::LoadVisualManifest(const FString& ManifestPath, FString& OutError)
@@ -275,6 +341,134 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// **入力 -> 物理 -> 描画 の順。** 逆にすると1フレーム遅れる。
+	ApplyDriverInput(DeltaSeconds);
 	AdvancePhysics(static_cast<double>(DeltaSeconds));
 	SyncVisualToPhysics();
+
+	if (bShowTelemetry)
+	{
+		DrawTelemetry();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 入力
+// ---------------------------------------------------------------------------
+
+void AZN6VehicleActor::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
+	if (PlayerInputComponent == nullptr)
+	{
+		return;
+	}
+
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Throttle"), this, &AZN6VehicleActor::InputThrottle);
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Brake"), this, &AZN6VehicleActor::InputBrake);
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Steer"), this, &AZN6VehicleActor::InputSteer);
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Clutch"), this, &AZN6VehicleActor::InputClutch);
+	PlayerInputComponent->BindAxis(TEXT("ZN6_Handbrake"), this, &AZN6VehicleActor::InputHandbrake);
+
+	PlayerInputComponent->BindAction(TEXT("ZN6_ShiftUp"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::ShiftUp);
+	PlayerInputComponent->BindAction(TEXT("ZN6_ShiftDown"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::ShiftDown);
+	PlayerInputComponent->BindAction(TEXT("ZN6_Reset"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::ResetToStart);
+}
+
+void AZN6VehicleActor::InputThrottle(float Value) { RawThrottle = Value; }
+void AZN6VehicleActor::InputBrake(float Value) { RawBrake = Value; }
+void AZN6VehicleActor::InputSteer(float Value) { RawSteer = Value; }
+void AZN6VehicleActor::InputClutch(float Value) { RawClutch = Value; }
+void AZN6VehicleActor::InputHandbrake(float Value) { RawHandbrake = Value; }
+
+void AZN6VehicleActor::ShiftUp()
+{
+	// **上限を超えない。** 存在しないギアを入れると TotalRatio が check で落ちる。
+	Control.GearIndex = FMath::Min(Control.GearIndex + 1, ZN6::ForwardGearCount - 1);
+}
+
+void AZN6VehicleActor::ShiftDown()
+{
+	Control.GearIndex = FMath::Max(Control.GearIndex - 1, 0);
+}
+
+void AZN6VehicleActor::ApplyDriverInput(float DeltaSeconds)
+{
+	// **キーボードの 0/1 をそのまま物理へ入れない。**
+	// 踏み込み量が無い入力を生で渡すと、アクセルもブレーキも常に全開全閉に
+	// なり、FR では即スピンする。時間をかけて目標値へ寄せる。
+	auto Approach = [DeltaSeconds](float Current, float Target, float Rate)
+	{
+		const float Step = Rate * DeltaSeconds;
+		return FMath::Abs(Target - Current) <= Step
+			? Target
+			: Current + FMath::Sign(Target - Current) * Step;
+	};
+
+	const float PedalRate = DriverFeel.PedalRatePerS;
+	Control.Throttle = Approach(static_cast<float>(Control.Throttle),
+	                            FMath::Clamp(RawThrottle, 0.0f, 1.0f), PedalRate);
+	Control.Brake = Approach(static_cast<float>(Control.Brake),
+	                         FMath::Clamp(RawBrake, 0.0f, 1.0f), PedalRate);
+
+	// クラッチは踏むと切れる（0 = 切、1 = 繋）。**入力の意味を反転させる。**
+	Control.Clutch = 1.0 - FMath::Clamp(RawClutch, 0.0f, 1.0f);
+	Control.Handbrake = FMath::Clamp(RawHandbrake, 0.0f, 1.0f);
+
+	// --- 操舵 -------------------------------------------------------------
+	//
+	// 速度が上がるほど最大舵角を絞る。**操作系の補助であって車の特性では
+	// ない**（憲法ルール18）。キーボードには「少しだけ切る」が無いため、
+	// これが無いと直線で軽く当てただけでスピンする。
+	const double SpeedMps = FMath::Abs(PhysicsState.VxMps);
+	const double Falloff = 1.0 / (1.0 + DriverFeel.SteerSpeedFalloffPerMps * SpeedMps);
+	const double SteerLimit = MaxSteerRad * Falloff;
+
+	const float Target = FMath::Clamp(RawSteer, -1.0f, 1.0f);
+	const bool bReturning = FMath::IsNearlyZero(Target);
+	const float Rate = bReturning
+		? DriverFeel.SteerReturnRateRadPerS
+		: DriverFeel.SteerRateRadPerS;
+
+	Control.SteerRad = Approach(static_cast<float>(Control.SteerRad),
+	                            Target * static_cast<float>(SteerLimit), Rate);
+	Control.SteerRad = FMath::Clamp(Control.SteerRad, -SteerLimit, SteerLimit);
+}
+
+void AZN6VehicleActor::DrawTelemetry() const
+{
+	if (GEngine == nullptr || !bPhysicsReady)
+	{
+		return;
+	}
+
+	const double SpeedKmh = PhysicsState.SpeedMps() * ZN6::KmhPerMps;
+	const double Rpm = ZN6::RadsToRpm(PhysicsState.EngineOmegaRads);
+
+	// **後輪のすべりを出す。** FR なのでここがスピンの前触れになる。
+	const double RearSlip = FMath::Max(
+		FMath::Abs(PhysicsOutputs.SlipRatio[static_cast<int32>(ZN6::EWheel::RL)]),
+		FMath::Abs(PhysicsOutputs.SlipRatio[static_cast<int32>(ZN6::EWheel::RR)]));
+	const double SideslipDeg = FMath::RadiansToDegrees(PhysicsState.SideslipRad());
+
+	GEngine->AddOnScreenDebugMessage(
+		1, 0.0f, FColor::White,
+		FString::Printf(TEXT("%5.1f km/h   %5.0f rpm   %d速"),
+		                SpeedKmh, Rpm, Control.GearIndex + 1));
+	GEngine->AddOnScreenDebugMessage(
+		2, 0.0f, RearSlip > 0.20 ? FColor::Orange : FColor::Silver,
+		FString::Printf(TEXT("後輪すべり率 %.3f   車体すべり角 %+.1f deg"),
+		                RearSlip, SideslipDeg));
+	GEngine->AddOnScreenDebugMessage(
+		3, 0.0f, FColor::Silver,
+		FString::Printf(TEXT("舵角 %+.1f deg / 最大 %.1f   ｱｸｾﾙ %.2f  ﾌﾞﾚｰｷ %.2f  ｸﾗｯﾁ %.2f"),
+		                FMath::RadiansToDegrees(Control.SteerRad),
+		                FMath::RadiansToDegrees(MaxSteerRad),
+		                Control.Throttle, Control.Brake, Control.Clutch));
+	GEngine->AddOnScreenDebugMessage(
+		4, 0.0f, FColor::Silver,
+		TEXT("W/S ｱｸｾﾙ･ﾌﾞﾚｰｷ   A/D 操舵   Space ｻｲﾄﾞ   LShift ｸﾗｯﾁ   E/Q 変速   R 戻す"));
 }

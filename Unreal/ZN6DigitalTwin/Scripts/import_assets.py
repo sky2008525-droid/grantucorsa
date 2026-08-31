@@ -73,6 +73,45 @@ def static_mesh_options():
     return options
 
 
+def configure_textures():
+    """法線・ラフネスを線形データとして扱わせる。
+
+    **取り込みの直後、マテリアルを作る前に済ませる。**
+
+    JPG から取り込むと既定で sRGB のカラーテクスチャになる。法線や
+    ラフネスは線形データなので、マテリアル側のサンプラ型と食い違い、
+    UE は「コンパイルできない」と警告して**既定のグレーマテリアルに
+    差し替える**。エラーではなく警告なので、気づかないまま
+    「なぜか灰色の路面」になる。
+
+    **設定の反映は次にアセットを読み込んだときになる。** 同じ実行の中で
+    設定してすぐマテリアルを作ると、まだ古い状態で判定されて失敗する
+    （実際に Color と Linear Grayscale で往復した）。だから取り込み側に
+    置き、レベル構築とは別の実行にしている。
+    """
+    changed = 0
+    for path in unreal.EditorAssetLibrary.list_assets(PKG_TEXTURE, recursive=True):
+        asset = unreal.EditorAssetLibrary.load_asset(path)
+        if not isinstance(asset, unreal.Texture2D):
+            continue
+        name = asset.get_name().lower()
+
+        if "_nor" in name:
+            settings = unreal.TextureCompressionSettings.TC_NORMALMAP
+        elif "_rough" in name or "_arm" in name:
+            settings = unreal.TextureCompressionSettings.TC_GRAYSCALE
+        else:
+            continue                      # カラーはそのままでよい
+
+        asset.set_editor_property("srgb", False)
+        asset.set_editor_property("compression_settings", settings)
+        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        changed += 1
+
+    log("テクスチャの色空間を修正: %d 枚" % changed)
+    return changed
+
+
 def enable_nanite_everywhere():
     """取り込んだ StaticMesh すべてで Nanite を有効にする。
 
@@ -196,6 +235,7 @@ def main():
     imported += import_track(root)
     imported += import_polyhaven(root)
 
+    configure_textures()
     enable_nanite_everywhere()
 
     log("取り込み完了: %d アセット" % len(imported))

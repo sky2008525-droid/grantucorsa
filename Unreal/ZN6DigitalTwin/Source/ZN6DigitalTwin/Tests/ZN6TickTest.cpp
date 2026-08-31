@@ -441,4 +441,99 @@ bool FZN6VisualWheelsFollowPhysics::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// 運転操作の層
+// ---------------------------------------------------------------------------
+//
+// キーボード入力を物理の入力へ変換する部分。**壊れても走れてしまう**ので
+// 気づきにくい: 変速で範囲外のギアが入る、舵角が一瞬で最大になる、
+// 最大舵角が実車と無関係な値になる、など。
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6DriverInputIsSane,
+	"ZN6.Tick.運転操作が物理の入力として妥当",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6DriverInputIsSane::RunTest(const FString& Parameters)
+{
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	// --- 最大舵角が実車の値から導かれているか ---
+	//
+	// **具体的な数値を期待値に書かない。** vehicle.json を直せば変わる。
+	// 「最小回転半径とホイールベースから導いた値と一致する」ことを見る。
+	const double MaxSteerRad = Actor->GetMaxSteerRad();
+	const double Expected = FMath::Atan2(2.570, 5.400);   // wheelbase / min_turning_radius
+	TestTrue(
+		*FString::Printf(TEXT("最大舵角 %.4f rad (%.1f deg) が最小回転半径から導かれている"),
+		                 MaxSteerRad, FMath::RadiansToDegrees(MaxSteerRad)),
+		FMath::Abs(MaxSteerRad - Expected) < 1e-6);
+
+	// **0 のままなら操舵が効かない。** 読み込み失敗を検出する。
+	TestTrue(TEXT("最大舵角がゼロでない"), MaxSteerRad > 0.1);
+
+	// --- 変速が範囲を外れないか ---
+	//
+	// 範囲外のギアは FDrivetrain::TotalRatio の check で落ちる。
+	// **落ちる前に止めること。**
+	Actor->SetPhysicsState(Actor->MakeInitialState(60.0 / 3.6, 2));
+	for (int32 Count = 0; Count < 20; ++Count)
+	{
+		Actor->ShiftUpForTest();
+	}
+	TestEqual(TEXT("上限を超えて変速しない"),
+	          Actor->GetControl().GearIndex, ZN6::ForwardGearCount - 1);
+
+	for (int32 Count = 0; Count < 20; ++Count)
+	{
+		Actor->ShiftDownForTest();
+	}
+	TestEqual(TEXT("下限を下回って変速しない"), Actor->GetControl().GearIndex, 0);
+
+	// --- 舵角が一瞬で最大にならないか ---
+	//
+	// キーボードは 0/1 しか出せない。生で渡すと FR では即スピンする。
+	Actor->SetPhysicsState(Actor->MakeInitialState(80.0 / 3.6, 3));
+	Actor->SetSteerInputForTest(1.0f);
+
+	Actor->ApplyDriverInputForTest(1.0f / 60.0f);
+	const double AfterOneFrame = FMath::Abs(Actor->GetControl().SteerRad);
+	TestTrue(
+		*FString::Printf(TEXT("1フレームで最大舵角へ飛ばない（%.4f rad）"), AfterOneFrame),
+		AfterOneFrame < MaxSteerRad * 0.5);
+
+	// 押し続ければいずれ上限に達し、**上限を超えない**
+	for (int32 Frame = 0; Frame < 240; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(1.0f / 60.0f);
+	}
+	const double Settled = FMath::Abs(Actor->GetControl().SteerRad);
+	TestTrue(
+		*FString::Printf(TEXT("押し続けると舵が入る（%.4f rad）"), Settled),
+		Settled > 0.02);
+	TestTrue(
+		*FString::Printf(TEXT("最大舵角を超えない（%.4f <= %.4f）"), Settled, MaxSteerRad),
+		Settled <= MaxSteerRad + 1e-9);
+
+	// --- 離すと中立へ戻るか ---
+	Actor->SetSteerInputForTest(0.0f);
+	for (int32 Frame = 0; Frame < 240; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(1.0f / 60.0f);
+	}
+	TestTrue(
+		*FString::Printf(TEXT("離すと中立へ戻る（%.5f rad）"),
+		                 Actor->GetControl().SteerRad),
+		FMath::Abs(Actor->GetControl().SteerRad) < 1e-6);
+
+	DestroyWorld(World);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

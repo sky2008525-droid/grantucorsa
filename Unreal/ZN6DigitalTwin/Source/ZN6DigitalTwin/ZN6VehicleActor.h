@@ -15,10 +15,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "GameFramework/Pawn.h"
 #include "Physics/ZN6Vehicle.h"
 #include "ZN6VehicleActor.generated.h"
 
+class UCameraComponent;
+class USpringArmComponent;
 class UStaticMeshComponent;
 
 /**
@@ -68,8 +70,50 @@ struct FZN6FixedStepAccumulator
 	int32 Consume(double FrameDeltaS);
 };
 
+/**
+ * 運転操作を物理の入力へ変換する層。
+ *
+ * **ここに書く値は車両仕様ではない**（憲法ルール18「現実の車両仕様と
+ * ゲーム上の演出を明確に分離する」）。キーボードは踏み込み量を持たない
+ * ので、操作感のために補間や制限を入れる必要がある。それは操作系の
+ * 都合であって、実車の特性ではない。**vehicle.json に混ぜないこと。**
+ */
+USTRUCT()
+struct FZN6DriverFeel
+{
+	GENERATED_BODY()
+
+	/**
+	 * 操舵をどれだけ速く動かすか [rad/s]。
+	 *
+	 * キーボードは 0 か 1 しか出せない。そのまま入れると最大舵角へ
+	 * 一瞬で飛び、**FR なので即スピンして1コーナーも曲がれない。**
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
+	float SteerRateRadPerS = 1.1f;
+
+	/** キーを離したときに中立へ戻る速さ [rad/s]。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
+	float SteerReturnRateRadPerS = 2.2f;
+
+	/**
+	 * 高速では舵角を絞る [1/(m/s)]。
+	 *
+	 * 実車のステアリングギア比は一定だが、**キーボードには「少しだけ
+	 * 切る」が無い。** 速度が上がるほど最大舵角を下げないと、直線で
+	 * 少し当てただけでスピンする。**これは操作系の補助であって、
+	 * 車の特性ではない。**
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
+	float SteerSpeedFalloffPerMps = 0.045f;
+
+	/** アクセル・ブレーキの立ち上がり [1/s]。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
+	float PedalRatePerS = 4.0f;
+};
+
 UCLASS()
-class ZN6DIGITALTWIN_API AZN6VehicleActor : public AActor
+class ZN6DIGITALTWIN_API AZN6VehicleActor : public APawn
 {
 	GENERATED_BODY()
 
@@ -78,6 +122,7 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
 	/**
 	 * vehicle.json を読み込んで物理モデルを初期化する。
@@ -134,6 +179,64 @@ public:
 			? WheelAttachM[WheelIndex] : FVector::ZeroVector;
 	}
 
+	/** 現在の操作入力（テストと HUD 用）。 */
+	const ZN6::FControlInput& GetControl() const { return Control; }
+
+	/** スタートラインへ戻す。**物理と描画の両方を初期化する。** */
+	void ResetToStart();
+
+	/** 最大舵角 [rad]。vehicle.json の最小回転半径から導いた値。 */
+	double GetMaxSteerRad() const { return MaxSteerRad; }
+
+	// --- テスト用の入り口 ---------------------------------------------------
+	//
+	// **入力の変換は PlayerController 無しでも検査できるようにする。**
+	// 実際にキーを押さないと確かめられない作りにすると、変速の範囲外や
+	// 舵角の即時最大化のような壊れ方が誰にも気づかれない。
+	void ShiftUpForTest() { ShiftUp(); }
+	void ShiftDownForTest() { ShiftDown(); }
+	void SetSteerInputForTest(float Value) { RawSteer = Value; }
+	void SetThrottleInputForTest(float Value) { RawThrottle = Value; }
+	void ApplyDriverInputForTest(float DeltaSeconds) { ApplyDriverInput(DeltaSeconds); }
+
+protected:
+	/** 追従カメラ。**描画専用で、物理には一切関与しない。** */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<USpringArmComponent> CameraBoom;
+
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<UCameraComponent> ChaseCamera;
+
+	/** 操作感の設定。**車両仕様ではない**（憲法ルール18）。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
+	FZN6DriverFeel DriverFeel;
+
+	/** 画面にテレメトリを出すか。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
+	bool bShowTelemetry = true;
+
+private:
+	// --- 入力ハンドラ -------------------------------------------------------
+	void InputThrottle(float Value);
+	void InputBrake(float Value);
+	void InputSteer(float Value);
+	void InputClutch(float Value);
+	void InputHandbrake(float Value);
+	void ShiftUp();
+	void ShiftDown();
+
+	/** 生の入力を、時間をかけて Control へ反映する。 */
+	void ApplyDriverInput(float DeltaSeconds);
+
+	void DrawTelemetry() const;
+
+	// 生の入力（-1..1 / 0..1）。**Control とは別に持つ。**
+	float RawThrottle = 0.0f;
+	float RawBrake = 0.0f;
+	float RawSteer = 0.0f;
+	float RawClutch = 0.0f;
+	float RawHandbrake = 0.0f;
+
 protected:
 	/** **描画専用。** 物理はこのコンポーネントを一切参照しない。 */
 	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
@@ -179,4 +282,17 @@ private:
 	 * **この値を物理へ戻さないこと。** 憲法ルール4（物理と表示の分離）。
 	 */
 	double VisualWheelAngleRad[ZN6::WheelCount] = {};
+
+	/**
+	 * 最大舵角 [rad]。
+	 *
+	 * **vehicle.json の `dimensions.min_turning_radius`（official）から導く。**
+	 * 自転車モデルで atan(wheelbase / turning_radius)。最小回転半径は
+	 * 外側前輪の軌跡半径なので厳密には一致しないが、**勝手な値を置くより
+	 * 一次資料から導いたほうがよい**（憲法ルール1・2）。
+	 *
+	 * 読めなかったときは 0 のままにして、操舵を効かせない。
+	 * **「それらしい既定値」で埋めないこと。**
+	 */
+	double MaxSteerRad = 0.0;
 };

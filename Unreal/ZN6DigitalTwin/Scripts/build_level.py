@@ -141,11 +141,18 @@ def make_surface_material(name, diffuse, normal, rough, uv_scale):
         node = sample(normal, -600, 100, unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL)
         lib.connect_material_property(node, "", unreal.MaterialProperty.MP_NORMAL)
     if rough is not None:
+        # ラフネスは線形グレースケール。**import_assets.py の
+        # configure_textures() が先に色空間を直していることが前提。**
+        # 食い違うとマテリアルは警告だけ出して既定のグレーに差し替わる。
         node = sample(rough, -600, 400, unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
         lib.connect_material_property(node, "", unreal.MaterialProperty.MP_ROUGHNESS)
 
     lib.recompile_material(material)
     unreal.EditorAssetLibrary.save_asset(material.get_path_name(), only_if_is_dirty=False)
+
+    # **コンパイルの成否はここでは分からない。** 失敗しても UE は警告を
+    # 出して既定マテリアルに差し替えるだけで、例外も戻り値も無い。
+    # ログの "Failed to compile Material" を見ること。
     return material
 
 
@@ -336,7 +343,16 @@ def place_vehicle(root):
             component.set_static_mesh(mesh)
             assigned += 1
 
-    log("車体メッシュ %d / 5 を割り当て（コンポーネント: %s）"
+    # **この車をプレイヤーが操作する。**
+    #
+    # AZN6GameMode は DefaultPawnClass を持たないので、ここで
+    # auto possess を立てないと操作対象が存在しない。逆に GameMode 側で
+    # spawn させると、Blender が決めた車輪位置も描画メッシュも持たない
+    # 「空の車」が出てくる。
+    actor.set_editor_property("auto_possess_player",
+                              unreal.AutoReceiveInput.PLAYER0)
+
+    log("車体メッシュ %d / 5 を割り当て（コンポーネント: %s）/ auto possess = Player0"
         % (assigned, ", ".join(sorted(by_name))))
     return actor
 
