@@ -189,6 +189,16 @@ def import_vehicle(root):
         # テクスチャ5枚が静かに欠けた（Blender/decompose_vehicle.py 参照）。
         tasks.append(build_task(path, "%s/%s" % (PKG_VEHICLE, name)))
 
+    # **生成した車輪を取り込む**（SPEC_PHASE2_BACKLOG.md 3.2-5）。
+    # 元モデルから切り出した車輪はリムのディテールが乏しく、UE 上で
+    # 「黒い輪」にしか見えなかった。公開寸法から生成したものへ差し替える。
+    for side in ("left", "right"):
+        path = os.path.join(export_dir, "ZN6_wheel_%s.glb" % side)
+        if not os.path.isfile(path):
+            unreal.log_error("[ZN6 import] 生成した車輪が無い: %s" % path)
+            continue
+        tasks.append(build_task(path, "%s/generated_%s" % (PKG_VEHICLE, side)))
+
     log("車体 %d パーツを取り込む" % len(tasks))
     return run_tasks(tasks)
 

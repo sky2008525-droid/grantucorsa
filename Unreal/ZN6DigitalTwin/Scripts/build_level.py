@@ -348,9 +348,13 @@ def place_vehicle(root):
               encoding="utf-8") as handle:
         manifest = json.load(handle)
 
+    # **生成した車輪を使う**（SPEC_PHASE2_BACKLOG.md 3.2-5）。
+    # 元モデルから切り出したもの（wheel_FL 等）はリムが潰れていて
+    # 「黒い輪」にしか見えなかった。左右で鏡像を使い分ける。
     for name in ("FL", "FR", "RL", "RR"):
-        mesh = find_asset("%s/wheel_%s" % (PKG_VEHICLE, name),
-                          "ZN6_wheel_%s" % name, unreal.StaticMesh)
+        side = "left" if name.endswith("L") else "right"
+        mesh = find_asset("%s/generated_%s" % (PKG_VEHICLE, side),
+                          "ZN6_", unreal.StaticMesh)
         component = by_name.get("Wheel" + name)
         if mesh is None or component is None:
             unreal.log_error("[ZN6 level] 車輪 %s を割り当てられない" % name)
