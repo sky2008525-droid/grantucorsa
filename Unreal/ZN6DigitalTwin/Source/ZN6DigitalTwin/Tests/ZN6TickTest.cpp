@@ -344,4 +344,101 @@ bool FZN6NoSpiralOfDeath::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// 描画用の車輪が物理と対応していること
+// ---------------------------------------------------------------------------
+//
+// 車輪を分解して描画するようにしたので、**添字の取り違えと符号の誤りを
+// 検出する**。左に曲がっているのに右の車輪が切れる、加速しているのに
+// 車輪が逆回転する、といった壊れ方はコンパイルを通ってしまう。
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6VisualWheelsFollowPhysics,
+	"ZN6.Tick.描画の車輪が物理に追従する",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6VisualWheelsFollowPhysics::RunTest(const FString& Parameters)
+{
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	const FString ManifestPath =
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("../..")) /
+		TEXT("Vehicles/ZN6/Export/manifest.json");
+
+	FString Error;
+	if (!Actor->LoadVisualManifest(ManifestPath, Error))
+	{
+		AddError(FString::Printf(TEXT("manifest を読めない: %s"), *Error));
+		DestroyWorld(World);
+		return false;
+	}
+
+	// --- 取り付け位置が車として成立しているか ---
+	//
+	// **具体的な数値をここに書かない。** モデルを差し替えたら変わる。
+	// 「前輪が後輪より前」「左右が対称」という**関係**だけを検査する。
+	const FVector FL = Actor->GetWheelAttachM(static_cast<int32>(ZN6::EWheel::FL));
+	const FVector FR = Actor->GetWheelAttachM(static_cast<int32>(ZN6::EWheel::FR));
+	const FVector RL = Actor->GetWheelAttachM(static_cast<int32>(ZN6::EWheel::RL));
+	const FVector RR = Actor->GetWheelAttachM(static_cast<int32>(ZN6::EWheel::RR));
+
+	TestTrue(FString::Printf(TEXT("前輪が後輪より前にある（%.3f > %.3f）"), FL.X, RL.X),
+	         FL.X > RL.X);
+	TestTrue(FString::Printf(TEXT("FL が左（Y>0）にある（%.3f）"), FL.Y), FL.Y > 0.0);
+	TestTrue(FString::Printf(TEXT("FR が右（Y<0）にある（%.3f）"), FR.Y), FR.Y < 0.0);
+	TestTrue(FString::Printf(TEXT("RL が左（Y>0）にある（%.3f）"), RL.Y), RL.Y > 0.0);
+	TestTrue(FString::Printf(TEXT("RR が右（Y<0）にある（%.3f）"), RR.Y), RR.Y < 0.0);
+	TestTrue(FString::Printf(TEXT("前輪の左右が対称（%.4f vs %.4f）"), FL.Y, -FR.Y),
+	         FMath::Abs(FL.Y + FR.Y) < 0.02);
+
+	// 車輪の中心高さ = 転がり半径。**ここがずれると車が浮く／埋まる。**
+	TestTrue(FString::Printf(TEXT("車輪中心が接地半径の高さにある（%.4f m）"), FL.Z),
+	         FL.Z > 0.25 && FL.Z < 0.40);
+
+	// --- 前進すると車輪が前転する ---
+	Actor->SetPhysicsState(Actor->MakeInitialState(60.0 / 3.6, 2));
+	Actor->SetControl(MakeCorneringControl());
+
+	for (int32 Frame = 0; Frame < 30; ++Frame)
+	{
+		Actor->AdvancePhysics(1.0 / 60.0);
+	}
+
+	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
+	{
+		TestTrue(
+			*FString::Printf(TEXT("%s の車輪速度が正（%.3f rad/s）"),
+			                 ZN6::WheelNames[Index],
+			                 Actor->GetPhysicsState().WheelOmegaRads[Index]),
+			Actor->GetPhysicsState().WheelOmegaRads[Index] > 0.0);
+
+		// **角度は角速度の積分。** 符号が食い違っていれば逆回転して見える。
+		TestTrue(
+			*FString::Printf(TEXT("%s の描画角が正（%.3f rad）"),
+			                 ZN6::WheelNames[Index],
+			                 Actor->GetVisualWheelAngleRad(Index)),
+			Actor->GetVisualWheelAngleRad(Index) > 0.0);
+	}
+
+	// --- 描画角を進めても物理は変わらない ---
+	//
+	// **憲法ルール4の検査。** 描画専用の状態が物理へ漏れていないこと。
+	const ZN6::FVehicleState Before = Actor->GetPhysicsState();
+	Actor->SyncVisualToPhysics();
+	const ZN6::FVehicleState After = Actor->GetPhysicsState();
+
+	TestEqual(TEXT("描画同期で vx が変わらない"), After.VxMps, Before.VxMps);
+	TestEqual(TEXT("描画同期で vy が変わらない"), After.VyMps, Before.VyMps);
+	TestEqual(TEXT("描画同期でヨーレートが変わらない"), After.YawRateRads, Before.YawRateRads);
+
+	DestroyWorld(World);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

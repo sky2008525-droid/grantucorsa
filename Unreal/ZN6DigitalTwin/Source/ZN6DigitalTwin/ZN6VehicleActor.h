@@ -85,6 +85,19 @@ public:
 	 */
 	bool InitialisePhysics(const FString& VehicleJsonPath, FString& OutError);
 
+	/**
+	 * Blender が書いた manifest.json から車輪の取り付け位置を読む。
+	 *
+	 * **位置をここにベタ書きしないこと。** 3Dモデルを差し替えたら
+	 * 取り付け位置も変わる。Blender/decompose_vehicle.py が出した値を
+	 * 唯一の情報源にする（vehicle.json と同じ考え方）。
+	 *
+	 * なお、ここで読むのは**描画用モデル自身の車輪位置**であって、
+	 * 物理の車輪位置（vehicle.json の wheelbase / track）ではない。
+	 * 憲法ルール4により両者は独立してよい。
+	 */
+	bool LoadVisualManifest(const FString& ManifestPath, FString& OutError);
+
 	/** 物理だけを1フレームぶん進める（描画を伴わない。テスト用）。 */
 	void AdvancePhysics(double FrameDeltaS);
 
@@ -107,10 +120,33 @@ public:
 	/** 累計ステップ数。目標周波数で回っているかの判定に使う。 */
 	int64 GetTotalStepCount() const { return TotalStepCount; }
 
+	/** 描画用の車輪回転角 [rad]。**物理には存在しない量。** */
+	double GetVisualWheelAngleRad(int32 WheelIndex) const
+	{
+		return (WheelIndex >= 0 && WheelIndex < ZN6::WheelCount)
+			? VisualWheelAngleRad[WheelIndex] : 0.0;
+	}
+
+	/** 車輪の取り付け位置 [m]（物理座標系）。manifest から読んだ値。 */
+	FVector GetWheelAttachM(int32 WheelIndex) const
+	{
+		return (WheelIndex >= 0 && WheelIndex < ZN6::WheelCount)
+			? WheelAttachM[WheelIndex] : FVector::ZeroVector;
+	}
+
 protected:
 	/** **描画専用。** 物理はこのコンポーネントを一切参照しない。 */
 	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
-	TObjectPtr<UStaticMeshComponent> VisualMesh;
+	TObjectPtr<UStaticMeshComponent> BodyMesh;
+
+	/**
+	 * 車輪の描画メッシュ。FL / FR / RL / RR の順（ZN6::EWheel と同じ）。
+	 *
+	 * **物理の車輪と1対1で対応させること。** 順番がずれると、
+	 * 左に曲がっているのに右の車輪が切れる、という絵になる。
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TArray<TObjectPtr<UStaticMeshComponent>> WheelMeshes;
 
 	UPROPERTY(EditAnywhere, Category = "ZN6|Physics")
 	FZN6FixedStepAccumulator Accumulator;
@@ -125,4 +161,22 @@ private:
 	bool bPhysicsReady = false;
 	double SimulatedTimeS = 0.0;
 	int64 TotalStepCount = 0;
+
+	/**
+	 * 車輪の取り付け位置 [m]（物理座標系: X 前方 / Y 左 / Z 上）。
+	 * manifest.json から読む。読めていなければ描画位置を動かさない。
+	 */
+	FVector WheelAttachM[ZN6::WheelCount] = {};
+	bool bVisualManifestLoaded = false;
+
+	/**
+	 * **描画専用の車輪回転角 [rad]。**
+	 *
+	 * 物理の状態は角速度（WheelOmegaRads）までしか持たない。角度は
+	 * 運動方程式に現れないので、物理側に持たせると「使われない状態変数」
+	 * が増えるだけになる。ここで積分して描画にだけ使う。
+	 *
+	 * **この値を物理へ戻さないこと。** 憲法ルール4（物理と表示の分離）。
+	 */
+	double VisualWheelAngleRad[ZN6::WheelCount] = {};
 };

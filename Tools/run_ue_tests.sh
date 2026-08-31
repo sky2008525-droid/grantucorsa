@@ -37,7 +37,48 @@ else
 fi
 
 echo "=============================================="
-echo " [1/2] Python 側の参照値を生成"
+echo " [1/3] C++ をビルド"
+echo "=============================================="
+# **ビルドを省略しないこと。**
+#
+# 以前このスクリプトはビルドせず、既存のバイナリでテストを実行していた。
+# その結果、**C++ を変更してもテストが古いバイナリで通り続け、
+# 「11件パス」を新しいコードの検証結果だと誤読した。**
+# 新しく追加したテストが一覧に現れないことで、ようやく気づいた。
+#
+# 失敗した状態を「完成」と呼ばないための最低条件（憲法ルール6）。
+# **Build.bat ではなく UnrealBuildTool を直接呼ぶ。**
+#
+# Git Bash から .bat を起動すると cmd 側でパスが分割され、
+# 「'C:\Program' は認識されていません」で落ちる（UE も本リポジトリも
+# 空白を含むパスに置かれている）。
+#
+# ただし UnrealBuildTool.exe を素で呼ぶと .NET 10 が無いと言われる
+# （システムには 7.0 と 8.0 しか無い）。Build.bat がやっているのは
+# **UE 同梱の dotnet を使わせること**なので、それを明示的に指定する。
+DOTNET="$UE_ROOT/Engine/Binaries/ThirdParty/DotNet/10.0/win-x64/dotnet.exe"
+UBT_DLL="$UE_ROOT/Engine/Binaries/DotNET/UnrealBuildTool/UnrealBuildTool.dll"
+if [ ! -x "$DOTNET" ] || [ ! -f "$UBT_DLL" ]; then
+    echo "ERROR  UnrealBuildTool を実行できない:" >&2
+    echo "         dotnet: $DOTNET" >&2
+    echo "         dll   : $UBT_DLL" >&2
+    exit 1
+fi
+
+BUILD_LOG="$(mktemp)"
+if ! "$DOTNET" "$UBT_DLL" ZN6DigitalTwinEditor Win64 Development \
+        -Project="$UPROJECT" -WaitMutex > "$BUILD_LOG" 2>&1; then
+    echo "ERROR  ビルドに失敗した。" >&2
+    tail -40 "$BUILD_LOG" >&2
+    rm -f "$BUILD_LOG"
+    exit 1
+fi
+grep -E "^\[[0-9]+/[0-9]+\]|Result:|Target is up to date" "$BUILD_LOG" | tail -6
+rm -f "$BUILD_LOG"
+
+echo
+echo "=============================================="
+echo " [2/3] Python 側の参照値を生成"
 echo "=============================================="
 # Windows のコンソールは cp932 なので、UTF-8 を明示しないと出力で落ちる
 if ! PYTHONIOENCODING=utf-8 "$VENV_PY" Tools/export_reference.py; then
@@ -47,7 +88,7 @@ fi
 
 echo
 echo "=============================================="
-echo " [2/2] UE5 の自動テストを実行"
+echo " [3/3] UE5 の自動テストを実行"
 echo "=============================================="
 rm -rf "$REPORT_DIR"
 
