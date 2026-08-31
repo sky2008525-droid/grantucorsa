@@ -175,17 +175,56 @@
       "note": "スロットル全閉時のエンジンブレーキトルク T = k * omega の線形係数。omega は rad/s。7,000rpm(733 rad/s) で約 51 N*m、アイドル(73 rad/s)で約 5 N*m となり、2.0L NA の一般的な範囲に収まる。実測なし。加速シミュレーションでは全開が主なので影響は小さいが、減速側とエンジンブレーキで効く。"
     },
     "rotational_inertia": {
-      "value": 0.13, "min": 0.10, "max": 0.25, "unit": "kg*m^2",
-      "source": "assumed", "method": "level3_identification_against_0_60mph_band",
-      "confidence": 0.25,
-      "note": "クランク+フライホイール+クラッチの合計。低速ギアでの加速に効く(等価質量として車重に上乗せされる)。1速では有効慣性が実質 30-60kg 相当になるため無視できない。",
-      "identification_log": {
-        "changed": "0.15 -> 0.13",
-        "date": "2026-08-30",
-        "reason": "0-60mph が正規化後の目標帯 6.60-7.60s に対し 8.09s で FAIL していたため、Level 3(assumed = 完全探索可能)のパラメータとして宣言済み範囲 0.10-0.25 の内側で同定した。あわせて変速時間(車両仕様ではなく試験手順)を 0.40 -> 0.25s に変更。結果 0-60mph 7.59s / 1/4マイル 15.73s で両方が帯に入った。",
-        "stopped_at": "DATA_SOURCE_POLICY.md §4『帯に入った時点でそのパラメータの探索は終了』に従い、帯に入る最小の変更量で止めた。0.10 まで下げれば 7.33s とより中央に寄るが、P50 に近づける最適化は禁止されている。",
-        "CRITICAL": "**confidence は 0.25 のまま据え置く。この操作でこの値が実測に裏付けられたわけではない。** 帯に入ったのは『誰も測っていないパラメータを動かしたから』であって、モデルが正しいことの証拠ではない。engine.rotational_inertia の実測が取れるまで、0-60mph の一致をモデルの妥当性の根拠にしてはいけない(issue #22)。",
-        "weak_constraint_note": "1/4マイルは帯が 14.80-16.30s と広く、探索した全16通りで PASS した。実質 0-60mph 1指標でしか縛れていない。憲法ルール10『複数指標で比較する』を満たすには、独立な指標(制動・スラローム)での検証が要る。"
+      "value": 0.229, "min": 0.205, "max": 0.255, "unit": "kg*m^2",
+      "source": "estimated", "method": "component_sum_see_rotational_inertia_components",
+      "confidence": 0.55,
+      "note": "クラッチ接続時にエンジン回転数で回る全質量(クランク組立+フライホイール+クラッチカバー＆ディスク)の合計。内訳は engine.rotational_inertia_components を参照。変速中(クラッチ切断)はディスク分がミッション入力軸側に移るため近似 0.214 kg*m^2 を使う。1速では有効慣性が実質 30-60kg 相当になるため無視できない。",
+      "superseded": "2026-08-30 に 0.13(assumed/0.25)から更新。旧値は Level 3 の『0-60mph目標帯に入るよう同定した』値で、実測の裏付けは無かった(issue #22)。今回の 0.229 はフライホイール・クラッチASSYの実測慣性(CUSCO一次資料)にクランク組立の幾何推定を足した合成値で、旧値より 76% 大きい。",
+      "issue22_status": "**この更新だけでは 0-60mph の FAIL(モデル8.09s / 目標帯6.60-7.60s)は解消しない。** 独立に組んだ簡易モデルの感度分析では、慣性0.13→0.229の効果(+0.32s程度)より、発進モデル(クラッチロック前提 → 滑りクラッチでの発進)の効果(-0.5〜-0.6s)の方が大きいと推定されている。issue #22 は引き続きオープンとし、次は Physics/clutch.py の発進モデル(現状ロック/スリップ切替はあるが、0-100加速の主経路である LongitudinalModel は launch_rpm 近似のままでクラッチモデル未使用)を疑うこと。1/4マイルのETとトラップ速度を分離して比較すると、トラップ速度が合ってETだけ遅い場合は慣性・発進側、トラップ速度自体が低い場合は出力側の問題と切り分けられる。"
+    },
+    "rotational_inertia_components": {
+      "_note": "engine.rotational_inertia の内訳。個別に検証済み。合計と使い分けは親ノードの note を参照。",
+      "crank_assembly": {
+        "value": 0.042, "min": 0.030, "max": 0.058, "unit": "kg*m^2",
+        "source": "estimated", "method": "fa20_geometry_crank_plus_reciprocating_plus_pulley_plus_valvetrain",
+        "confidence": 0.30,
+        "note": "FA20(ボア86×ストローク86、クランク半径43mm、水平対向4気筒)のクランクシャフト単体 約0.026 + 往復・回転質量の等価分 約0.005 + フロントプーリー/ダンパー 約0.007 + 動弁系のチェーン経由換算 約0.002。個別部品重量の出典なし。"
+      },
+      "flywheel_mass": {
+        "value": 9.34, "unit": "kg",
+        "source": "measured",
+        "method": "cusco_news1310_04_oem_comparison_figure",
+        "source_url": "https://www.cusco.co.jp/products/pdf/1311_04%2086%20BRZ%20FLYWHEEL.pdf",
+        "note": "CUSCO(株式会社キャロッセ)『超軽量クロモリ・フライホイール』新製品リリース(第4版 NEWS1310-04 2013/10月)に『純正重量9.34kg』と明記。Claude Code が該当PDFを直接読み、記載を確認済み(2026-08-31)。DATA_SOURCE_POLICY.md §3-5(社外品メーカーの純正比較記述)により採用可。みんカラのパーツレビュー複数件でも『純正9.3kg』『純正9キロちょい』と整合。",
+        "confidence": 0.80
+      },
+      "flywheel_inertia": {
+        "value": 0.12426, "min": 0.118, "max": 0.131, "unit": "kg*m^2",
+        "source": "measured",
+        "method": "cusco_news1310_04_oem_comparison_figure",
+        "note": "同資料に『フライホイール慣性モーメント 526.8kgfcm^2 純正1242.6kg-cm^2 純正比42%』。1242.6 kg*cm^2 = 0.12426 kg*m^2。単位表記の検証: I/m=1242.6/9.34=133.0cm^2 → 回転半径k=115.3mm。クラッチディスク外径φ230に対しリングギヤ外周は約φ275なので、k=115mmは幾何学的に整合する(GD^2表記 I=GD^2/4 と解釈すると k=57.7mmとなりリングギヤより内側になり物理的に不可)。よって I=mk^2 表記と確定。",
+        "confidence": 0.75
+      },
+      "clutch_assembly_mass": {
+        "value": 15.3, "unit": "kg",
+        "source": "measured",
+        "method": "cusco_news1310_04_oem_comparison_figure",
+        "note": "同資料に『クラッチASSY重量 10.8kg 純正15.3kg 純正比71%』。CUSCOの『クラッチASSY』はフライホイール＋クラッチカバー＋クラッチディスクの合計。15.3-9.34=5.96kgがカバー＋ディスク分となり、φ230クラッチの一般値と整合する。",
+        "confidence": 0.70
+      },
+      "clutch_assembly_inertia": {
+        "value": 0.18926, "min": 0.180, "max": 0.199, "unit": "kg*m^2",
+        "source": "measured",
+        "method": "cusco_news1310_04_oem_comparison_figure",
+        "note": "同資料に『クラッチ慣性モーメント 1176.8kgfcm^2 純正1892.6kgfcm^2 純正比62%』。",
+        "confidence": 0.70
+      },
+      "cover_plus_disc_inertia": {
+        "value": 0.0650, "min": 0.055, "max": 0.075, "unit": "kg*m^2",
+        "source": "calculated",
+        "method": "clutch_assembly_inertia_minus_flywheel_inertia",
+        "confidence": 0.55,
+        "note": "1892.6-1242.6=650.0 kg*cm^2。CUSCO品側でも 1176.8-526.8=650.0 と完全一致しており、同社はカバー＋ディスクの慣性を両条件で同値としている(=純正とCUSCO品でカバー＋ディスク重量がほぼ同一という前提)。『純正カバー＋純正ディスク』の直接測定値ではなく差分から逆算した値である点に注意。"
       }
     }
   },
@@ -327,12 +366,23 @@
   },
 
   "tires": {
-    "size": { "value": "215/45R17 87W", "source": "measured", "confidence": 0.75,
-              "method": "edmunds_test_car_fitment_plus_toyota_europe_material",
-              "note": "【出所に注意】データドロップは official / 0.95 としていたが、取得済みの公式諸元表(2015-02)にタイヤの行は存在しない(Docs/SOURCE_A_VERIFICATION.md で確認済み)。official を名乗る一次資料が示されていないため measured に落としてある。根拠は Edmunds 試験車の実装タイヤと Toyota 欧州資料。サービスマニュアルか純正部品資料が取れたら official に上げること(#4)。G/RC は 205/55R16。" },
+    "size": { "value": "215/45R17 87W", "source": "official", "confidence": 0.90,
+              "method": "toyota_jp_equipment_list_pdf_201511_cross_checked_201803",
+              "source_url": "https://toyota.jp/pages/contents/86/001_p_004/pdf/spec/86_equipment_list_201511.pdf",
+              "note": "【#4 の続報。以前の official/0.95 主張とは別物】以前 official/0.95 として提示された根拠は、取得済みの主要諸元表(86_spec_201502.pdf)にタイヤの行が無く却下した(measured/0.75 に格下げ済み)。今回は主要諸元表ではなく別PDFの『86 主要装備一覧表』(2015-11版、2018-03版でも同一記載を確認済みとされる)が根拠で、トヨタは諸元表と装備一覧表を別ファイルに分けている。GT/GT\"Limited\"=215/45R17 87W、G=205/55R16 91V。Claude Code 側でURLの実在をブラウザで確認済み(実PDFへの直リンクとして応答、404ではない)。ただし本文はまだ取得・通読していないため confidence は official 帯の下限 0.90 に留めた。実PDFを Vehicles/ZN6/References/ に保存して通読できたら 0.95 まで上げてよい。",
+              "verification_status": "URL到達性のみ確認(ブラウザでPDFダウンロード応答を確認)。本文の目視確認は未実施。" },
     "oem_brand": { "value": "Michelin Primacy HP", "source": "measured", "confidence": 0.80,
                    "method": "edmunds_test_car_plus_toyota_europe_material",
                    "note": "純正装着銘柄。タイヤモデルのパラメータ探索(TireModel_A/B/C)の出発点になる。" },
+    "rim_width": { "value": "7J", "unit": "-", "source": "calculated", "confidence": 0.90,
+                   "method": "jatma_standard_rim_width_for_215_45r17",
+                   "note": "215/45R17 のJATMA標準リム幅は7Jで、size.value の装備一覧表(GT系)記載の純正リム『17×7J』と一致する。標準リムと純正リムが一致するため、セクション幅・外径のリム幅補正が不要。" },
+    "load_index": { "value": 87, "unit": "-", "source": "calculated", "confidence": 0.90,
+                     "method": "jatma_load_index_table_lookup",
+                     "note": "size.value『215/45R17 87W』の負荷指数。JATMA/ETRTO標準表で 87 = 545kg/本。タイヤモデルの荷重感度の定義域上限に使える。" },
+    "speed_symbol": { "value": "W", "unit": "-", "source": "calculated", "confidence": 0.90,
+                       "method": "jatma_speed_symbol_table_lookup",
+                       "note": "size.value の速度記号。JATMA/ETRTO標準表で W = 270km/h。" },
     "wheel": { "value": "17x7J +48 PCD100 5H hub56", "source": "secondary", "confidence": 0.75,
                "method": "parts_listing_consensus",
                "note": "GT グレードの純正ホイール。ホイール慣性の推定に使う。" },
@@ -340,14 +390,15 @@
       "value": 0.3127, "min": 0.3120, "max": 0.3135, "unit": "m",
       "source": "calculated", "method": "jatma_nominal_dimensions_from_tire_size",
       "confidence": 0.85,
-      "note": "JATMA 呼称寸法: (17*25.4 + 2*215*0.45)/2 = 312.65mm。市販銘柄の実寸 625-626mm と整合。サイズさえ正しければ一意に決まるため estimated ではなく calculated。"
+      "note": "JATMA 呼称寸法: (17*25.4 + 2*215*0.45)/2 = 312.65mm。市販銘柄の実寸 625-626mm と整合。サイズさえ正しければ一意に決まるため estimated ではなく calculated。チャット側ドロップが独立に同じ式で 0.31265m を算出しており、±0.05mm で一致(丸め差)。"
     },
     "effective_radius": {
       "value": 0.3055, "min": 0.3020, "max": 0.3085, "unit": "m",
       "source": "estimated", "method": "re_approx_static_plus_two_unloaded_over_three",
       "confidence": 0.60,
       "note": "有効転がり半径 R_e ~= (R_static + 2*R_unloaded)/3。【独立検証あり】6速(0.767) x ファイナル(4.100) と組んで 100km/h のとき 2,731rpm となり、実車の6速100km/h ≒ 2,700rpm と一致する。",
-      "WARNING": "縦断モデルはこの1個の値で全速度域がスケールする。変更したら必ず ギア比 x ファイナル x R_e の逆算チェック（Tests/test_physics_components.py）を通すこと。"
+      "WARNING": "縦断モデルはこの1個の値で全速度域がスケールする。変更したら必ず ギア比 x ファイナル x R_e の逆算チェック（Tests/test_physics_components.py）を通すこと。",
+      "_conflicting_candidate_2026_08_31": "チャット側ドロップが別法(無負荷半径0.31265m x 転動有効係数0.955、範囲0.937-0.976)で 0.2986m(範囲0.2930-0.3050)を提示。現行値0.3055の範囲下限0.3020を下回り、単純な平均化はしていない。**採用しなかった理由**: 現行値は6速100km/h≒2,700rpmという独立実測との逆算チェックに通っているが、新候補にはこの裏付けが無い。転動有効係数0.955の根拠(指定空気圧未取得)も現行のstatic_plus_two_unloaded_over_three法より弱い。VALIDATORでの再検討推奨。"
     },
     "_rejected_effective_radius": "greeco-channel の 0.316m は採用しない。無負荷半径 0.31265m を 1.1% 上回っており、荷重下の有効転がり半径が無負荷半径を超えることは物理的にあり得ない。以前は「算出根拠不明」を理由としていたが、幾何計算により物理法則違反であることが確認できた。",
     "static_loaded_radius": {
@@ -443,8 +494,14 @@
       "n_sources": 5
     },
 
-    "acceleration_0_100_kmh": "unknown",
-    "_acceleration_0_100_kmh_note": "JDM ZN6 にはメーカー公称の 0-100km/h が存在しない。上記の実測は全て 0-60mph(96.56km/h) であり、metric が違う。**換算して比較しないこと。** モデル側も 0-60mph を計算して同じ metric で突き合わせる。0-100km/h の直接実測が取れたらここを埋める。",
+    "acceleration_0_100_kmh": {
+      "value": 7.6, "unit": "s",
+      "source": "official_marketing", "method": "toyota_europe_gt86_press_technical_data_0_62mph",
+      "confidence": 0.85,
+      "weak": true,
+      "note": "JDMにはメーカー公称の0-100km/hが存在しないため、欧州仕様GT86 6MT(0-62mph)のメーカー公表値を暫定的に置く。同一パワートレイン・同一ギア比だが、欧州仕様車重1239-1273kgは日本仕様GT 6MT(1230kg)よりやや重く、その分やや不利側に出ている可能性がある。出典1つのみのため weak(DATA_SOURCE_POLICY.md §5)。これを根拠に Level 2/3 パラメータを変更しないこと。"
+    },
+    "_acceleration_0_100_kmh_note": "JDM ZN6 にはメーカー公称の 0-100km/h が存在しない。accel_0_60_mph の実測(上記)は全て 0-60mph(96.56km/h) であり、metric が違う。**換算して比較しないこと。** モデル側の 0-60mph 計算は accel_0_60_mph と、0-100km/h 計算は上記 acceleration_0_100_kmh(欧州公式値・weak)と、それぞれ同じ metric 同士で突き合わせる。【チャット側ドロップへの訂正】2026-08-31 のドロップは『目標帯6.60-7.60sが0-100km/hと0-60mphを混同している』とCRITICAL指摘したが、これは誤り。6.60-7.60s は accel_0_60_mph のフィールドであり、モデル側も 0-60mph を計算して比較している(0-100km/h には比較対象が無いままだった)。分離済みのものを『分離すべき』と指摘した形。JDMの直接実測が取れたら acceleration_0_100_kmh を差し替える。",
 
     "quarter_mile": {
       "value": 15.40, "min": 14.80, "max": 16.30, "unit": "s",
