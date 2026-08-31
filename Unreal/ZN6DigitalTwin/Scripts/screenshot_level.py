@@ -16,33 +16,24 @@ SceneCapture2D を使う。PIE を起動しないので、Actor の BeginPlay �
 走らない（＝車は物理を始めず原点に立ったまま）。**ここで見たいのは
 配置であって挙動ではない。**
 
-## 現状の限界（未解決）
+## かつて空しか撮れなかった原因（解決済み）
 
-**ヘッドレス（-unattended、実ビューポート無し）では、このスクリプトは
-空しか撮れない。** SkyAtmosphere は写るが、StaticMeshActor が1つも
-写らない。
+このスクリプトは長いあいだ空だけを撮り続けた。SkyAtmosphere は写るのに
+StaticMeshActor が1つも写らない。レベルが空なのではなく（撮影直前に
+Actor を数えて 532 個を確認していた）、**メッシュ側の問題だった。**
 
-レベルが空なのではないことは確認済み。撮影直前に Actor を数えており、
+原因は `set_editor_property("nanite_settings", ...)` で Nanite の
+フラグだけを立て、**データをビルドしていなかった**こと。有効なのに中身が
+無いメッシュは描画対象から外れる。エラーも警告も出ず、`is_visible()` は
+True、三角形数もフォールバック値が返るため、調べても正常に見えた。
 
-    Actor 532 個: StaticMeshActor x527, ZN6VehicleActor x1,
-                  SkyAtmosphere x1, SkyLight x1,
-                  DirectionalLight x1, ExponentialHeightFog x1
+`import_assets.py` の `enable_nanite_everywhere()` が
+`StaticMeshEditorSubsystem.set_nanite_settings(..., apply_changes=True)`
+を使い、`get_num_nanite_triangles()` が 0 でないことを検証するように
+なって解決した。
 
-と出る。**中身はある。描画されていない。**
-
-切り分けのために試して駄目だったこと:
-
-  - 露出・霧の濃度（既定 0.02 -> 0.0008）    灰色一色は解消したが変化なし
-  - HDRIBackdrop -> SkyAtmosphere            空は出るようになった
-  - カメラの向きを注視点から計算             向きの問題ではない
-  - 撮影中だけ r.Nanite 0                    変化なし
-
-実ビューポートが無いと静的メッシュの描画状態が作られないためと思われるが、
-確証は無い。**「たぶんこうだろう」で片付けず、未解決として残す。**
-
-見た目の確認は、当面 UE エディタでレベルを開いて行うこと:
-
-    Content/ZN6/Maps/PhysicsTestTrack
+**つまりこのスクリプトは正しく動いていて、被写体のほうが壊れていた。**
+描画されないときは、まずメッシュの Nanite データを疑うこと。
 """
 
 import os
