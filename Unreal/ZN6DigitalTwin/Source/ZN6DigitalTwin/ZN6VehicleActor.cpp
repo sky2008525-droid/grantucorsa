@@ -10,7 +10,9 @@
 #include "Misc/Paths.h"
 #include "Engine/GameViewportClient.h"
 #include "Physics/ZN6Units.h"
+#include "GameFramework/PlayerController.h"
 #include "UI/SZN6Hud.h"
+#include "UI/SZN6Menu.h"
 #include "Widgets/SWeakWidget.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -211,15 +213,123 @@ void AZN6VehicleActor::CreateHud()
 
 	GEngine->GameViewport->AddViewportWidgetContent(
 		SNew(SWeakWidget).PossiblyNullContent(Hud.ToSharedRef()), /*ZOrder=*/10);
+
+	// --- メニュー ---
+	//
+	// **HUD より手前**に出す。メニューを開いたら計器はその下に隠れる。
+	Menu = SNew(SZN6Menu)
+		.OnStartRace_Lambda([this]()
+		{
+			ReturnToMenu();
+			StartCountdown();
+		})
+		.OnFreeRun_Lambda([this]()
+		{
+			ReturnToMenu();
+			StartFreeRun();
+		})
+		.OnResume_Lambda([this]() { Race.Resume(); })
+		.OnQuit_Lambda([this]()
+		{
+			// **確認せずに閉じる**のは避けたいが、ここは QUIT を選んだ後。
+			if (APlayerController* PlayerPC = Cast<APlayerController>(GetController()))
+			{
+				PlayerPC->ConsoleCommand(TEXT("quit"));
+			}
+		})
+		.OnSetupChanged_Lambda([this](const ZN6::FCarSetup& NewSetup)
+		{
+			ApplySetup(NewSetup);
+		});
+
+	if (bSetupLimitsReady)
+	{
+		Menu->SetLimits(SetupLimits);
+	}
+	Menu->SetSetup(Setup);
+
+	GEngine->GameViewport->AddViewportWidgetContent(
+		SNew(SWeakWidget).PossiblyNullContent(Menu.ToSharedRef()), /*ZOrder=*/20);
+
+	// **最初はメニューから始める。** いきなり走り出さない。
+	Menu->Open(SZN6Menu::EPage::Main);
+	if (APlayerController* PlayerPC = Cast<APlayerController>(GetController()))
+	{
+		PlayerPC->SetShowMouseCursor(true);
+	}
 }
 
 void AZN6VehicleActor::DestroyHud()
 {
-	if (Hud.IsValid() && GEngine != nullptr && GEngine->GameViewport != nullptr)
+	if (GEngine != nullptr && GEngine->GameViewport != nullptr)
 	{
-		GEngine->GameViewport->RemoveViewportWidgetContent(Hud.ToSharedRef());
+		if (Hud.IsValid())
+		{
+			GEngine->GameViewport->RemoveViewportWidgetContent(Hud.ToSharedRef());
+		}
+		if (Menu.IsValid())
+		{
+			GEngine->GameViewport->RemoveViewportWidgetContent(Menu.ToSharedRef());
+		}
 	}
 	Hud.Reset();
+	Menu.Reset();
+}
+
+void AZN6VehicleActor::ApplySetup(const ZN6::FCarSetup& InSetup)
+{
+	// **範囲に収めてから使う。** 画面が範囲外を渡してきても物理へは通さない。
+	Setup = bSetupLimitsReady ? SetupLimits.Clamped(InSetup) : InSetup;
+
+	FString Error;
+	if (!Vehicle.Init(VehicleData, /*bUseLsd=*/true, Error, Setup))
+	{
+		// **黙って古い設定のまま走らせない。**
+		UE_LOG(LogTemp, Error,
+		       TEXT("ZN6: セッティングを適用できない: %s"), *Error);
+		return;
+	}
+
+	FString RideError;
+	bRideReady = Ride.Init(VehicleData, RideError, Setup);
+	if (!bRideReady)
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: 接地モデルを作り直せない: %s"), *RideError);
+	}
+
+	// ばねが変われば釣り合う高さも変わる。**置き直す。**
+	SettleRide();
+}
+
+void AZN6VehicleActor::ToggleMenu()
+{
+	if (!Menu.IsValid())
+	{
+		return;
+	}
+
+	if (Menu->IsOpen())
+	{
+		Menu->Close();
+		Race.Resume();
+	}
+	else
+	{
+		// 走行中に開いたら止める。**時計も止まる。**
+		Race.Pause();
+		Menu->SetSetup(Setup);
+		Menu->SetSnapshot(MakeHudSnapshot());
+		Menu->Open(Race.Phase() == ZN6::ERacePhase::Finished
+			? SZN6Menu::EPage::Result : SZN6Menu::EPage::Main);
+	}
+
+	// **マウスカーソルと入力モードを合わせる。**
+	// メニューが開いているのに車が操作できると、画面の裏で走り出す。
+	if (APlayerController* PlayerPC = Cast<APlayerController>(GetController()))
+	{
+		PlayerPC->SetShowMouseCursor(Menu->IsOpen());
+	}
 }
 
 ZN6::FHudSnapshot AZN6VehicleActor::MakeHudSnapshot() const
@@ -282,7 +392,7 @@ bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString
 	// 接地モデル。**読めなくても平面3自由度は動く**ので、失敗しても
 	// 物理そのものは止めない。ただし黙って無効にはしない。
 	FString RideError;
-	bRideReady = Ride.Init(VehicleData, RideError);
+	bRideReady = Ride.Init(VehicleData, RideError, Setup);
 	if (!bRideReady)
 	{
 		UE_LOG(LogTemp, Warning,
@@ -290,9 +400,19 @@ bool AZN6VehicleActor::InitialisePhysics(const FString& VehicleJsonPath, FString
 		            "置かれるだけになる（重力で支えられない）。"), *RideError);
 	}
 
-	if (!Vehicle.Init(VehicleData, /*bUseLsd=*/true, OutError))
+	if (!Vehicle.Init(VehicleData, /*bUseLsd=*/true, OutError, Setup))
 	{
 		return false;
+	}
+
+	// 調整範囲。**読めなければセッティング画面は「調整不可」と出す。**
+	// 勝手な範囲を作らない（憲法ルール1）。
+	FString LimitsError;
+	bSetupLimitsReady = SetupLimits.Init(VehicleData, LimitsError);
+	if (!bSetupLimitsReady)
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: セッティングの調整範囲を読めない: %s"), *LimitsError);
 	}
 
 	// 最大舵角を最小回転半径から導く。**読めなければ 0 のままにする。**
@@ -831,6 +951,20 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 		Hud->SetSnapshot(MakeHudSnapshot());
 	}
 
+	// 規定周回を終えたら、**放っておいてもリザルトを出す。**
+	// 何も起きないと「終わったのか固まったのか」が分からない。
+	if (Menu.IsValid() && !Menu->IsOpen()
+	    && Race.Phase() == ZN6::ERacePhase::Finished)
+	{
+		Menu->SetSetup(Setup);
+		Menu->SetSnapshot(MakeHudSnapshot());
+		Menu->Open(SZN6Menu::EPage::Result);
+		if (APlayerController* PlayerPC = Cast<APlayerController>(GetController()))
+		{
+			PlayerPC->SetShowMouseCursor(true);
+		}
+	}
+
 	if (bShowTelemetry)
 	{
 		DrawTelemetry();
@@ -861,6 +995,8 @@ void AZN6VehicleActor::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	                                 this, &AZN6VehicleActor::ShiftDown);
 	PlayerInputComponent->BindAction(TEXT("ZN6_Reset"), IE_Pressed,
 	                                 this, &AZN6VehicleActor::ResetToStart);
+	PlayerInputComponent->BindAction(TEXT("ZN6_Menu"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::ToggleMenu);
 }
 
 void AZN6VehicleActor::InputThrottle(float Value) { RawThrottle = Value; }

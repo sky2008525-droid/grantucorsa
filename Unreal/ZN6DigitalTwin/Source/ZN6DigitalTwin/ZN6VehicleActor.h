@@ -271,6 +271,21 @@ public:
 	/** 画面へ渡す値を作る。**一方向。UI からは書き戻さない。** */
 	ZN6::FHudSnapshot MakeHudSnapshot() const;
 
+	/**
+	 * セッティングを適用する。**物理モデルを作り直す。**
+	 *
+	 * 走行中に呼ぶことは想定していない（メニューから呼ぶ）。
+	 * 車の状態は保つが、姿勢は新しいばねで釣り合わせ直す。
+	 */
+	void ApplySetup(const ZN6::FCarSetup& InSetup);
+
+	const ZN6::FCarSetup& GetSetup() const { return Setup; }
+	const ZN6::FSetupLimits& GetSetupLimits() const { return SetupLimits; }
+
+	/** メニューを開く / 閉じる。 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|UI")
+	void ToggleMenu();
+
 	/** 車体が乗っている地面の高さ [m]（4輪の接地点の平均）。 */
 	double GetGroundHeightM() const { return GroundHeightM; }
 
@@ -498,6 +513,14 @@ private:
 
 	/** 走行中の画面。**入力は奪わない**（HitTestInvisible）。 */
 	TSharedPtr<class SZN6Hud> Hud;
+
+	/** メニュー。**開いている間だけ入力を取る。** */
+	TSharedPtr<class SZN6Menu> Menu;
+
+	/** 今のセッティングと、その調整範囲。 */
+	ZN6::FCarSetup Setup;
+	ZN6::FSetupLimits SetupLimits;
+	bool bSetupLimitsReady = false;
 
 	/** 画面をビューポートへ出す / 片付ける。 */
 	void CreateHud();

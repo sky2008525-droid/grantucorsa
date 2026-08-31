@@ -388,7 +388,11 @@ int32 SZN6Hud::PaintMiniMap(const FGeometry& Geometry, FSlateWindowElementList& 
 	{
 		Points.Add(ToScreen(Point));
 	}
-	Points.Add(Points[0]);           // 閉じる
+	// 閉じる。**Points.Add(Points[0]) と書かないこと。**
+	// TArray は「自分の要素を自分へ足す」のを assert で止める（再確保で
+	// 参照が無効になりうるため）。実際にエディタごと落ちた。
+	const FVector2f First = Points[0];
+	Points.Add(First);
 
 	FSlateDrawElement::MakeLines(Out, Next, Geometry.ToPaintGeometry(), Points,
 	                             ESlateDrawEffect::None, AccentDim(), true, 2.0f);
