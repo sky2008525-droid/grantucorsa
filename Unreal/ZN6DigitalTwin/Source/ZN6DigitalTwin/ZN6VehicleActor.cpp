@@ -188,6 +188,8 @@ void AZN6VehicleActor::ResetToStart()
 	{
 		VisualWheelAngleRad[Index] = 0.0;
 	}
+	VisualRollRad = VisualRollRateRads = 0.0;
+	VisualPitchRad = VisualPitchRateRads = 0.0;
 	Accumulator.AccumulatedS = 0.0;
 	SyncVisualToPhysics();
 }
@@ -275,7 +277,43 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 		{
 			VisualWheelAngleRad[Wheel] += PhysicsState.WheelOmegaRads[Wheel] * FixedStep;
 		}
+
+		AdvanceVisualAttitude(FixedStep);
 	}
+}
+
+void AZN6VehicleActor::AdvanceVisualAttitude(double DtS)
+{
+	// **荷重移動を目に見える形にするだけ。実車のロール角ではない。**
+	// 理由は FZN6BodyAttitudeFeel のコメント（ロール剛性を出すのに要る
+	// モーションレシオ・減衰・ロールセンタ高さが揃っていない）。
+	//
+	// 入力は物理が出した加速度。**物理へは戻さない。**
+
+	const double OmegaN = 2.0 * ZN6::Pi * AttitudeFeel.ResponseHz;
+	const double Zeta = AttitudeFeel.DampingRatio;
+
+	// ay が正 = 左向き加速 = 左旋回。車体は外側（右）へ傾く。
+	const double TargetRollRad = FMath::DegreesToRadians(
+		-AttitudeFeel.RollDegPerG * PhysicsOutputs.AyMps2 / ZN6::GravityMps2);
+
+	// ax が正 = 加速。車体は後ろへ沈む = 機首上げ。
+	const double TargetPitchRad = FMath::DegreesToRadians(
+		AttitudeFeel.PitchDegPerG * PhysicsOutputs.AxMps2 / ZN6::GravityMps2);
+
+	// 減衰つき2次系。**1次の平滑化ではなく2次にする。**
+	// 実車の車体は切り返しで揺り返すので、そこが見えないと
+	// 「何が起きているか」が分からない。
+	auto Advance = [OmegaN, Zeta, DtS](double& Angle, double& Rate, double Target)
+	{
+		const double Accel = (Target - Angle) * OmegaN * OmegaN
+		                   - 2.0 * Zeta * OmegaN * Rate;
+		Rate += Accel * DtS;
+		Angle += Rate * DtS;
+	};
+
+	Advance(VisualRollRad, VisualRollRateRads, TargetRollRad);
+	Advance(VisualPitchRad, VisualPitchRateRads, TargetPitchRad);
 }
 
 void AZN6VehicleActor::SyncVisualToPhysics()
@@ -302,6 +340,25 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 	const FRotator Rotation(0.0, -FMath::RadiansToDegrees(PhysicsState.HeadingRad), 0.0);
 
 	SetActorLocationAndRotation(Location, Rotation);
+
+	// --- 車体だけを傾ける ---------------------------------------------------
+	//
+	// **Actor 全体を回さないこと。** 回すと車輪も一緒に傾いて地面から
+	// 浮く。実車もバネ上（車体）だけが傾き、車輪は接地したままである。
+	//
+	// 原点は接地面にあるので、そのまま回すと車体の下端が地面へめり込む。
+	// 少し上の点を中心に回す（**ロールセンタではなく、見た目が破綻しない
+	// 高さを選んでいるだけ**）。
+	{
+		const FRotator BodyTilt(
+			FMath::RadiansToDegrees(VisualPitchRad),
+			0.0,
+			FMath::RadiansToDegrees(VisualRollRad));
+
+		const FVector Pivot(0.0, 0.0, AttitudeFeel.PivotHeightM * MetresToCentimetres);
+		BodyMesh->SetRelativeLocation(Pivot - BodyTilt.RotateVector(Pivot));
+		BodyMesh->SetRelativeRotation(BodyTilt);
+	}
 
 	if (!bVisualManifestLoaded)
 	{
@@ -460,8 +517,11 @@ void AZN6VehicleActor::DrawTelemetry() const
 		                SpeedKmh, Rpm, Control.GearIndex + 1));
 	GEngine->AddOnScreenDebugMessage(
 		2, 0.0f, RearSlip > 0.20 ? FColor::Orange : FColor::Silver,
-		FString::Printf(TEXT("後輪すべり率 %.3f   車体すべり角 %+.1f deg"),
-		                RearSlip, SideslipDeg));
+		FString::Printf(TEXT("後輪すべり率 %.3f   車体すべり角 %+.1f deg   "
+		                     "ロール %+.1f / ピッチ %+.1f deg（演出）"),
+		                RearSlip, SideslipDeg,
+		                FMath::RadiansToDegrees(VisualRollRad),
+		                FMath::RadiansToDegrees(VisualPitchRad)));
 	GEngine->AddOnScreenDebugMessage(
 		3, 0.0f, FColor::Silver,
 		FString::Printf(TEXT("舵角 %+.1f deg / 最大 %.1f   ｱｸｾﾙ %.2f  ﾌﾞﾚｰｷ %.2f  ｸﾗｯﾁ %.2f"),

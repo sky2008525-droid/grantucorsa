@@ -617,4 +617,111 @@ bool FZN6CarActuallyDrives::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// 車体姿勢（荷重移動の可視化）
+// ---------------------------------------------------------------------------
+//
+// **これは実車のロール角ではない。** ロール剛性を出すのに要る
+// モーションレシオ・減衰・ロールセンタ高さが揃っていないため、角度そのものは
+// 検査しない。検査するのは**向きと、物理へ戻っていないこと。**
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6BodyAttitudeFollowsLoadTransfer,
+	"ZN6.Tick.車体姿勢が荷重移動に追従し物理へ戻らない",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6BodyAttitudeFollowsLoadTransfer::RunTest(const FString& Parameters)
+{
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	constexpr float FrameDt = 1.0f / 60.0f;
+
+	// --- 左旋回で外側（右）へ傾くか ---
+	Actor->SetPhysicsState(Actor->MakeInitialState(80.0 / 3.6, 3));
+	Actor->SetControl(MakeCorneringControl());        // steer +0.05 = 左旋回
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		Actor->AdvancePhysics(FrameDt);
+	}
+
+	const double Ay = Actor->GetPhysicsOutputs().AyMps2;
+	const double Roll = Actor->GetVisualRollRad();
+
+	TestTrue(
+		*FString::Printf(TEXT("左旋回で横加速度が正（%.2f m/s^2）"), Ay),
+		Ay > 0.5);
+	// **符号が逆だと内側へ傾く。** 見ればすぐ分かるが、見ない限り分からない。
+	TestTrue(
+		*FString::Printf(TEXT("左旋回では外側へ傾く（ロール %.3f rad）"), Roll),
+		Roll < -0.001);
+
+	// --- 加速でノーズが上がるか ---
+	Actor->ResetToStart();
+	Actor->SetThrottleInputForTest(1.0f);
+	for (int32 Frame = 0; Frame < 180; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(FrameDt);
+		Actor->AdvancePhysics(FrameDt);
+	}
+	TestTrue(
+		*FString::Printf(TEXT("加速でノーズが上がる（ピッチ %.3f rad、ax %.2f）"),
+		                 Actor->GetVisualPitchRad(), Actor->GetPhysicsOutputs().AxMps2),
+		Actor->GetVisualPitchRad() > 0.001);
+
+	// --- 姿勢が物理へ戻っていないこと ---
+	//
+	// **憲法ルール3の検査。** 姿勢の係数は演出値（実車由来ではない）なので、
+	// これが荷重移動へ影響すると、検証済みの 0-100km/h や制動距離が
+	// 演出値で変わってしまう。
+	//
+	// 姿勢の設定を極端に変えて同じ走行を再現し、物理がビット単位で
+	// 変わらないことを見る。
+	auto RunWithFeel = [this](float RollDegPerG, ZN6::FVehicleState& OutState) -> bool
+	{
+		UWorld* Local = nullptr;
+		AZN6VehicleActor* Car = SpawnInitialised(*this, Local);
+		if (Car == nullptr)
+		{
+			DestroyWorld(Local);
+			return false;
+		}
+		FZN6BodyAttitudeFeel Feel;
+		Feel.RollDegPerG = RollDegPerG;
+		Feel.PitchDegPerG = RollDegPerG;
+		Car->SetAttitudeFeelForTest(Feel);
+
+		Car->SetPhysicsState(Car->MakeInitialState(80.0 / 3.6, 3));
+		Car->SetControl(MakeCorneringControl());
+		for (int32 Frame = 0; Frame < 120; ++Frame)
+		{
+			Car->AdvancePhysics(1.0 / 60.0);
+			Car->SyncVisualToPhysics();
+		}
+		OutState = Car->GetPhysicsState();
+		DestroyWorld(Local);
+		return true;
+	};
+
+	ZN6::FVehicleState Mild, Wild;
+	if (!RunWithFeel(0.0f, Mild) || !RunWithFeel(45.0f, Wild))
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	TestEqual(TEXT("姿勢の設定を変えても vx が変わらない"), Wild.VxMps, Mild.VxMps);
+	TestEqual(TEXT("姿勢の設定を変えても vy が変わらない"), Wild.VyMps, Mild.VyMps);
+	TestEqual(TEXT("姿勢の設定を変えてもヨーレートが変わらない"),
+	          Wild.YawRateRads, Mild.YawRateRads);
+
+	DestroyWorld(World);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

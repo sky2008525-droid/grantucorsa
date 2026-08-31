@@ -112,6 +112,61 @@ struct FZN6DriverFeel
 	float PedalRatePerS = 4.0f;
 };
 
+/**
+ * 荷重移動を車体の傾きとして見せるための設定。
+ *
+ * **これは車両仕様ではない。実車のロール角でもない。**
+ *
+ * 実車のロール角を出すには、ロール剛性が要る。しかし
+ *
+ *   - `suspension.spring_rate_*` は estimated だが、**モーションレシオが
+ *     unknown なのでホイールレートが決まらない**（vehicle.json の WARNING）
+ *   - `suspension.damper_front` / `damper_rear` は **"unknown"**
+ *   - ロールセンタ高さは vehicle.json に無い
+ *
+ * の3つが欠けており、角度を物理的に導けない。憲法ルール1は「数値が
+ * 見つからないときの正解は空欄のまま残すこと」としており、実際
+ * damper は "unknown" と明記されている。**それを勝手に埋めない。**
+ *
+ * 一方で**荷重移動そのものは official な実データ**（質量・重心高・
+ * ホイールベース・トレッド）から出ており根拠がある。そこでここでは
+ * 「荷重移動を目に見える形にする」ことだけを行い、**係数は演出値として
+ * vehicle.json の外に置く**（憲法ルール18）。
+ *
+ * データが揃ったら、これを捨てて本物のロール自由度に置き換えること
+ * （issue #19）。
+ */
+USTRUCT()
+struct FZN6BodyAttitudeFeel
+{
+	GENERATED_BODY()
+
+	/** 横 1G あたり何度傾けるか [deg/G]。**実車の値ではない。** */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float RollDegPerG = 4.5f;
+
+	/** 前後 1G あたり何度ピッチさせるか [deg/G]。**実車の値ではない。** */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float PitchDegPerG = 2.6f;
+
+	/** 応答の速さ [Hz]。実車のロール固有振動数はこのあたり。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float ResponseHz = 1.4f;
+
+	/** 減衰比。1 未満で少し揺り返す。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float DampingRatio = 0.75f;
+
+	/**
+	 * 傾きの回転中心の高さ [m]（接地面から）。
+	 *
+	 * **ロールセンタではない。** 0 にすると車体の下端が地面へめり込む
+	 * ので、見た目が破綻しない位置を選んでいるだけ。
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float PivotHeightM = 0.35f;
+};
+
 UCLASS()
 class ZN6DIGITALTWIN_API AZN6VehicleActor : public APawn
 {
@@ -188,6 +243,10 @@ public:
 	/** 最大舵角 [rad]。vehicle.json の最小回転半径から導いた値。 */
 	double GetMaxSteerRad() const { return MaxSteerRad; }
 
+	/** 描画用の車体姿勢 [rad]。**物理には存在しない量。** */
+	double GetVisualRollRad() const { return VisualRollRad; }
+	double GetVisualPitchRad() const { return VisualPitchRad; }
+
 	// --- テスト用の入り口 ---------------------------------------------------
 	//
 	// **入力の変換は PlayerController 無しでも検査できるようにする。**
@@ -199,6 +258,7 @@ public:
 	void SetThrottleInputForTest(float Value) { RawThrottle = Value; }
 	void SetBrakeInputForTest(float Value) { RawBrake = Value; }
 	void ApplyDriverInputForTest(float DeltaSeconds) { ApplyDriverInput(DeltaSeconds); }
+	void SetAttitudeFeelForTest(const FZN6BodyAttitudeFeel& InFeel) { AttitudeFeel = InFeel; }
 
 protected:
 	/** 追従カメラ。**描画専用で、物理には一切関与しない。** */
@@ -215,6 +275,10 @@ protected:
 	/** 画面にテレメトリを出すか。 */
 	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
 	bool bShowTelemetry = true;
+
+	/** 荷重移動の可視化。**車両仕様ではない**（憲法ルール18）。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	FZN6BodyAttitudeFeel AttitudeFeel;
 
 private:
 	// --- 入力ハンドラ -------------------------------------------------------
@@ -283,6 +347,21 @@ private:
 	 * **この値を物理へ戻さないこと。** 憲法ルール4（物理と表示の分離）。
 	 */
 	double VisualWheelAngleRad[ZN6::WheelCount] = {};
+
+	/**
+	 * **描画専用の車体姿勢 [rad] とその角速度。**
+	 *
+	 * 物理が出した ax / ay を入力とする2次系。**物理へは戻さない。**
+	 * 戻すと、演出値である減衰・比例係数が荷重移動を変え、検証済みの
+	 * 0-100km/h や制動距離を汚染する（憲法ルール3が禁じる辻褄合わせ）。
+	 */
+	double VisualRollRad = 0.0;
+	double VisualRollRateRads = 0.0;
+	double VisualPitchRad = 0.0;
+	double VisualPitchRateRads = 0.0;
+
+	/** 姿勢を Dt 進める（固定刻みの中で呼ぶ）。 */
+	void AdvanceVisualAttitude(double DtS);
 
 	/**
 	 * 最大舵角 [rad]。
