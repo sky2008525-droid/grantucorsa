@@ -51,11 +51,6 @@ from vehicle_data import VehicleData                 # noqa: E402
 
 OUT_DIR = Path(__file__).resolve().parent / "Generated"
 
-#: エンジンのループを何段階の回転数で作るか。
-#: **段数を増やすほど繋ぎ目が目立たなくなる**が、その分ファイルが増える。
-#: 再生側（UE / audio_model）が隣り合う2つを混ぜる前提。
-ENGINE_STEPS = 8
-
 #: 1ループの長さ [s]。**点火周期の整数倍に丸めてループ点を合わせる。**
 #: 丸めないと、繋ぎ目で位相が飛んで「プツッ」と鳴る。
 LOOP_SECONDS = 1.0
@@ -231,13 +226,13 @@ def write_wav(path: Path, samples: np.ndarray, sample_rate_hz: int) -> None:
         handle.writeframes(pcm.tobytes())
 
 
-def engine_rpm_steps(model: AudioModel, steps: int = ENGINE_STEPS):
-    """ループを作る回転数の並び。アイドルからレッドラインまで等間隔。"""
-    if steps < 2:
-        raise ValueError("段数が少なすぎる")
-    return [model.idle_rpm
-            + (model.redline_rpm - model.idle_rpm) * index / (steps - 1)
-            for index in range(steps)]
+def engine_rpm_steps(model: AudioModel):
+    """ループを作る回転数の並び。**並べ方は audio_model が決める。**
+
+    ここで別に計算すると、再生側（`engine_loop_blend`）が想定する段と
+    ずれても誰も気づかない。
+    """
+    return model.engine_loop_rpms()
 
 
 def build_all(model: AudioModel, write: bool = True):
@@ -247,7 +242,10 @@ def build_all(model: AudioModel, write: bool = True):
     for index, rpm in enumerate(engine_rpm_steps(model)):
         # 負荷ありと負荷なしを別に作る。**再生側で混ぜて音色を変える。**
         for tag, brightness in (("load", model.load_brightness), ("overrun", 0.0)):
-            name = "engine_{:02d}_{}_{:.0f}rpm".format(index, tag, rpm)
+            # **ファイル名に回転数を入れない。** 段の並びは loop_steps で
+            # 変わるので、名前に埋めると UE 側のアセット名が不安定になる。
+            # どの段が何 rpm かは manifest.json に書く。
+            name = "engine_{:02d}_{}".format(index, tag)
             results.append((name, engine_loop(model, rpm, brightness)))
 
     results.append(("tire_skid", skid_loop(model)))
@@ -260,8 +258,43 @@ def build_all(model: AudioModel, write: bool = True):
             write_wav(path, samples, model.sample_rate_hz)
             print("書き出した: {} ({:.2f} s)".format(
                 path.name, len(samples) / model.sample_rate_hz))
+        write_manifest(model, results)
 
     return results
+
+
+def write_manifest(model: AudioModel, results) -> Path:
+    """どの段が何 rpm かを残す。**再生側はこれを読む。**
+
+    ファイル名に回転数を埋めると、`loop_steps` を変えた瞬間に
+    UE のアセット名が全部変わる。名前は固定して、対応表を別に持つ。
+    """
+    import json
+
+    manifest = {
+        "_meta": {
+            "generated_by": "Audio/synth.py",
+            "warning": "**この音は FA20 の音ではない。** 実車を録音していない。",
+            "see": "Audio/audio.json（全パラメータが assumed）",
+        },
+        "sample_rate_hz": model.sample_rate_hz,
+        "engine_loop_rpm": [
+            {"index": index, "rpm": rpm,
+             "load": "engine_{:02d}_load".format(index),
+             "overrun": "engine_{:02d}_overrun".format(index)}
+            for index, rpm in enumerate(model.engine_loop_rpms())
+        ],
+        "tire_skid": {"name": "tire_skid", "base_hz": model.skid_base_hz},
+        "road": [{"surface": surface, "name": "road_" + surface}
+                 for surface in model.surfaces],
+        "files": [name for name, _ in results],
+    }
+
+    path = OUT_DIR / "manifest.json"
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+    print("書き出した: {}".format(path.name))
+    return path
 
 
 def main() -> int:
@@ -283,8 +316,8 @@ def main() -> int:
     results = build_all(model, write=not args.check)
 
     print()
-    print("エンジン {} 段（{:.0f} .. {:.0f} rpm）".format(
-        ENGINE_STEPS, model.idle_rpm, model.redline_rpm))
+    print("エンジン {} 段（{:.0f} .. {:.0f} rpm、等比）".format(
+        model.engine_loop_steps, model.idle_rpm, model.redline_rpm))
     print("**この音は FA20 の音ではない。** 実車を録音していない（Audio/audio.json）。")
     print("合成 {} ファイル / {} Hz".format(len(results), model.sample_rate_hz))
     return 0

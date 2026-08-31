@@ -182,6 +182,7 @@ class AudioModel:
         self.rolling_gain = self.audio.number("road.rolling_gain", "-")
         self.rolling_ref_mps = self.audio.number("road.rolling_ref_mps", "m/s")
 
+        self.engine_loop_steps = int(self.audio.value("engine.loop_steps", "-"))
         self.master_gain = self.audio.number("mix.master_gain", "-")
         self.sample_rate_hz = int(self.audio.value("mix.sample_rate_hz", "Hz"))
 
@@ -242,6 +243,53 @@ class AudioModel:
         if total <= 0.0:
             raise ValueError("倍音の振幅が全てゼロ")
         return [(order, amp / total) for order, amp in weighted]
+
+    # --- ループの選択 -----------------------------------------------------
+
+    def engine_loop_rpms(self, steps: int = None) -> List[float]:
+        """エンジンループを作る回転数。**等比で並べる。**
+
+        等間隔にすると、低回転側の隣り合う段の比が大きくなりすぎる
+        （700 と 1657 なら 2.37 倍）。再生時のピッチ倍率は比で効くので、
+        **UE の SetPitchMultiplier が受け付ける範囲（既定 0.4〜2.0）を
+        超えてしまう。** 等比なら全ての段で同じ比になる。
+        """
+        count = self.engine_loop_steps if steps is None else steps
+        if count < 2:
+            raise ValueError("段数が少なすぎる: {}".format(count))
+        ratio = (self.redline_rpm / self.idle_rpm) ** (1.0 / (count - 1))
+        return [self.idle_rpm * ratio ** index for index in range(count)]
+
+    def engine_loop_blend(self, engine_rpm: float
+                          ) -> List[Tuple[int, float, float]]:
+        """再生するループの選択。`[(段の番号, 音量比, ピッチ倍率), ...]`。
+
+        隣り合う2段を混ぜる。**音量比の合計は必ず 1。**
+        ピッチ倍率は「今の回転数 / その段の回転数」。
+
+        範囲外（アイドル未満・レッドライン超過）では端の1段だけを使い、
+        ピッチだけを伸ばす。**段を勝手に増やさない。**
+        """
+        rpms = self.engine_loop_rpms()
+        rpm = max(float(engine_rpm), 1.0)
+
+        if rpm <= rpms[0]:
+            return [(0, 1.0, rpm / rpms[0])]
+        if rpm >= rpms[-1]:
+            last = len(rpms) - 1
+            return [(last, 1.0, rpm / rpms[last])]
+
+        upper = next(i for i, value in enumerate(rpms) if value >= rpm)
+        lower = upper - 1
+
+        # **対数で混ぜる。** 線形だと段の中央でピッチが偏る。
+        span = math.log(rpms[upper] / rpms[lower])
+        ratio = math.log(rpm / rpms[lower]) / span
+
+        return [
+            (lower, 1.0 - ratio, rpm / rpms[lower]),
+            (upper, ratio, rpm / rpms[upper]),
+        ]
 
     # --- タイヤ -----------------------------------------------------------
 

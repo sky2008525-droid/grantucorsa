@@ -16,7 +16,9 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "Audio/ZN6VehicleAudioComponent.h"
 #include "Physics/ZN6Obstacles.h"
+#include "Physics/ZN6Track.h"
 #include "Physics/ZN6Terrain.h"
 #include "Physics/ZN6Vehicle.h"
 #include "ZN6VehicleActor.generated.h"
@@ -220,6 +222,19 @@ public:
 	/** 直近のステップで接触した障害物の数。**0 なら何も触れていない。** */
 	int32 GetContactCount() const { return ContactCount; }
 
+	/**
+	 * 音を鳴らす準備をする。**読めなくても物理は動く。**
+	 *
+	 * 音は演出であって物理ではない（憲法ルール18）。ここが失敗しても
+	 * 走りは変わらない。**逆に、音が出ていても走りが変わってはいけない。**
+	 */
+	bool InitialiseAudio(const FString& RepoRoot, FString& OutError);
+
+	UZN6VehicleAudioComponent* GetAudio() const { return Audio; }
+
+	/** 路面の端までの符号つき距離 [m]。内側が正。音のクロスフェードに使う。 */
+	double GetDistanceToTrackEdgeM() const;
+
 	/** 車体が乗っている地面の高さ [m]（4輪の接地点の平均）。 */
 	double GetGroundHeightM() const { return GroundHeightM; }
 
@@ -402,6 +417,19 @@ private:
 
 	ZN6::FHeightfield Heightfield;
 	bool bHeightfieldLoaded = false;
+
+	/** コース中心線。**音のクロスフェードに使う。物理へは返さない。** */
+	ZN6::FTrackEdge TrackEdge;
+	bool bTrackEdgeLoaded = false;
+
+	/**
+	 * 音。**物理の後に更新する。**
+	 *
+	 * ここが物理へ書き戻すことは無い。`ZN6.Audio.音は物理に影響しない`
+	 * がそれを毎回確かめる。
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Audio")
+	TObjectPtr<UZN6VehicleAudioComponent> Audio;
 
 	/** 障害物。**Vehicle.Step の後**に解く。 */
 	ZN6::FObstacleField Obstacles;

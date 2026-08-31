@@ -78,6 +78,10 @@ AZN6VehicleActor::AZN6VehicleActor()
 	}
 
 	// --- 追従カメラ。**描画専用。** ---------------------------------------
+	// **音は最後。** 物理にも描画にも関わらない（憲法ルール18）。
+	Audio = CreateDefaultSubobject<UZN6VehicleAudioComponent>(TEXT("VehicleAudio"));
+	Audio->SetupAttachment(Root);
+
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(Root);
 	CameraBoom->TargetArmLength = 750.0f;
@@ -133,6 +137,13 @@ void AZN6VehicleActor::BeginPlay()
 	{
 		UE_LOG(LogTemp, Warning,
 		       TEXT("ZN6: 地形を読めない: %s。平地として走る。"), *Error);
+	}
+
+	// 音。**鳴らなくても走りは変わらない。**
+	if (!InitialiseAudio(RepoRoot, Error))
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: 音を用意できない: %s。無音で走る。"), *Error);
 	}
 
 	// 障害物。**読めなければ当たり判定なしで走る。**
@@ -214,6 +225,33 @@ bool AZN6VehicleActor::LoadHeightfield(const FString& HeightfieldPath, FString& 
 {
 	bHeightfieldLoaded = Heightfield.LoadFromFile(HeightfieldPath, OutError);
 	return bHeightfieldLoaded;
+}
+
+bool AZN6VehicleActor::InitialiseAudio(const FString& RepoRoot, FString& OutError)
+{
+	// コース中心線。**音のクロスフェードにしか使わない。**
+	// 読めなければ距離 0（境界の真上）として扱われ、路面が半々に混ざる。
+	FString TrackError;
+	bTrackEdgeLoaded = TrackEdge.LoadFromFile(
+		RepoRoot / TEXT("Tracks/physics_test_track.json"), TrackError);
+	if (!bTrackEdgeLoaded)
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: コース中心線を読めない: %s。路面の混合が働かない。"),
+		       *TrackError);
+	}
+
+	if (Audio == nullptr)
+	{
+		OutError = TEXT("音のコンポーネントが無い");
+		return false;
+	}
+	return Audio->Initialise(RepoRoot, VehicleData, OutError);
+}
+
+double AZN6VehicleActor::GetDistanceToTrackEdgeM() const
+{
+	return TrackEdge.DistanceToEdgeM(PhysicsState.XM, PhysicsState.YM);
 }
 
 bool AZN6VehicleActor::LoadObstacles(const FString& PlacementPath, FString& OutError)
@@ -528,6 +566,20 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 	ApplyDriverInput(DeltaSeconds);
 	AdvancePhysics(static_cast<double>(DeltaSeconds));
 	SyncVisualToPhysics();
+
+	// **音は物理の後。** 固定刻みの中ではなくフレームごとに更新する
+	// （音は聞こえるものであって、積分するものではない）。
+	if (Audio != nullptr && Audio->IsReady())
+	{
+		double Worst = 0.0;
+		for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+		{
+			Worst = FMath::Max(Worst, PhysicsOutputs.Utilisation[Wheel]);
+		}
+		Audio->UpdateAudio(PhysicsOutputs.EngineRpm, Control.Throttle, Worst,
+		                   PhysicsState.SpeedMps(), GetDistanceToTrackEdgeM(),
+		                   SimulatedTimeS);
+	}
 
 	if (bShowTelemetry)
 	{

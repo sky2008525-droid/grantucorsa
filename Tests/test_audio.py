@@ -324,3 +324,66 @@ def test_サンプル数がループ周期の整数倍(model):
         assert abs(cycles - round(cycles)) < 1e-6, (
             "{:.0f} rpm で周期が {:.4f} 個ぶん（整数でない）".format(rpm, cycles)
         )
+
+
+# --- ループの選択 -----------------------------------------------------------
+
+
+def test_ループの回転数が等比(model):
+    """**等間隔にしない。** 再生時のピッチ倍率は比で効く。
+
+    等間隔だと低回転側の隣り合う段の比が 2.37 倍になり、
+    UE の SetPitchMultiplier が受け付ける範囲（既定 0.4〜2.0）を超える。
+    """
+    rpms = model.engine_loop_rpms()
+    assert rpms[0] == pytest.approx(model.idle_rpm, rel=1e-12)
+    assert rpms[-1] == pytest.approx(model.redline_rpm, rel=1e-12)
+
+    ratios = [b / a for a, b in zip(rpms, rpms[1:])]
+    for ratio in ratios:
+        assert ratio == pytest.approx(ratios[0], rel=1e-9), "等比になっていない"
+        assert ratio < 2.0, "隣り合う段の比 {:.3f} が大きすぎる".format(ratio)
+
+
+def test_混合比の合計は1でピッチ倍率が範囲内(model):
+    for rpm in np.arange(300.0, 8200.0, 25.0):
+        blend = model.engine_loop_blend(float(rpm))
+        assert sum(gain for _, gain, _ in blend) == pytest.approx(1.0, rel=1e-12)
+        for index, gain, pitch in blend:
+            assert 0 <= index < model.engine_loop_steps
+            assert gain >= 0.0
+            # アイドル未満・レッドライン超過では端の段を伸ばすので、
+            # そこだけは範囲を外れうる。**黙って丸めない**ので、
+            # 使用回転域（アイドル〜レッドライン）で確かめる。
+            if model.idle_rpm <= rpm <= model.redline_rpm:
+                assert 0.4 < pitch < 2.0, (
+                    "{:.0f} rpm でピッチ倍率 {:.3f}".format(rpm, pitch))
+
+
+def test_段の回転数ちょうどではその段だけが鳴る(model):
+    for index, rpm in enumerate(model.engine_loop_rpms()):
+        blend = model.engine_loop_blend(rpm)
+        loud = [(i, g, p) for i, g, p in blend if g > 1e-9]
+        assert len(loud) == 1, "{:.0f} rpm で {} 段が鳴っている".format(rpm, len(loud))
+        assert loud[0][0] == index
+        assert loud[0][2] == pytest.approx(1.0, rel=1e-9), "ピッチを変える必要が無い"
+
+
+def test_混合比が回転に対して跳ばない(model):
+    """**段の切り替わりで音量が飛ばないこと。**"""
+    rpms = np.arange(model.idle_rpm, model.redline_rpm, 1.0)
+    total = np.zeros((len(rpms), model.engine_loop_steps))
+    for row, rpm in enumerate(rpms):
+        for index, gain, _ in model.engine_loop_blend(float(rpm)):
+            total[row, index] = gain
+    jumps = np.abs(np.diff(total, axis=0))
+    assert jumps.max() < 0.01, "混合比が {:.4f} 跳んでいる".format(jumps.max())
+
+
+def test_合成したループが選択と同じ段数(model):
+    import synth
+
+    rpms = synth.engine_rpm_steps(model)
+    assert rpms == model.engine_loop_rpms(), (
+        "合成した段と再生側の段がずれている（音が回転数と合わなくなる）"
+    )

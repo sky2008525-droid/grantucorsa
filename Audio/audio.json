@@ -60,6 +60,12 @@
       "source": "assumed",
       "note": "スロットル全開時に高次倍音をどれだけ持ち上げるか。"
     },
+    "loop_steps": {
+      "value": 8,
+      "unit": "-",
+      "source": "assumed",
+      "note": "アイドル〜レッドラインを何段のループで持つか。等比に並べる（audio_model.engine_loop_rpms）。多いほど繋ぎ目が目立たないが、その分アセットが増える。"
+    },
     "limiter_flutter_hz": {
       "value": 22.0,
       "unit": "Hz",
