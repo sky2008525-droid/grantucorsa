@@ -29,9 +29,24 @@ namespace ZN6
 	inline constexpr double KmhPerMps = 3.6;
 	inline constexpr double M3PerLitre = 1.0e-3;
 
-	inline double RadsPerRpm()
+	/**
+	 * 円周率。**UE の `PI` を使わないこと。**
+	 *
+	 * UE の `PI` は float 定数（`3.1415926535897932f`）で、double に昇格させても
+	 * 3.14159274101257324... となり、Python の `math.pi` と相対 2.8e-8 ずれる。
+	 * 単位変換は全ての rpm <-> rad/s が通る1点なので、ここでずれると
+	 * エンジン回転数を経由する量すべてに波及する。
+	 *
+	 * **単位の取り違えと同じで、物理的にあり得ない結果ではなく
+	 * 「もっともらしい間違った結果」として現れる。** double 版を使いたい
+	 * 場合は UE_DOUBLE_PI もあるが、Python 側と同じ値であることを明示したいので
+	 * ここで定義する。
+	 */
+	inline constexpr double Pi = 3.14159265358979323846;
+
+	inline constexpr double RadsPerRpm()
 	{
-		return 2.0 * PI / 60.0;
+		return 2.0 * Pi / 60.0;
 	}
 
 	inline double KmhToMps(double Kmh) { return Kmh / KmhPerMps; }

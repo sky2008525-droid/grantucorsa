@@ -2,6 +2,15 @@
 
 #include "ZN6Units.h"
 
+// **数学関数は FMath ではなく標準ライブラリを使う。**
+//
+// Python 側は math モジュール（= C の libm）を呼んでいる。特に
+// math.hypot は sqrt(x*x + y*y) と数値的に別物で、中間の二乗による丸めを
+// 避けるぶん精度が高い。FMath::Sqrt(X*X + Y*Y) に置き換えると、
+// **物理は同じなのに結果が相対 1e-6 ずれる。** 実装間の比較が
+// 「同じ計算をしているか」の判定にならなくなるため、関数まで揃える。
+#include <cmath>
+
 namespace ZN6
 {
 	const TCHAR* const ForwardGears[6] = { TEXT("1"), TEXT("2"), TEXT("3"), TEXT("4"), TEXT("5"), TEXT("6") };
@@ -188,6 +197,10 @@ namespace ZN6
 	{
 		if (!Data.GetValue(TEXT("tires.friction_coefficient"), TEXT("-"), Mu0, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("tires.load_sensitivity"), TEXT("1/N"), LoadSensitivityPerN, OutError)) { return false; }
+		if (!Data.GetValue(TEXT("tires.cornering_stiffness_per_load"), TEXT("1/rad"),
+		                   CorneringStiffnessPerLoad, OutError)) { return false; }
+		if (!Data.GetValue(TEXT("tires.longitudinal_stiffness_per_load"), TEXT("-"),
+		                   LongitudinalStiffnessPerLoad, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("tires.effective_radius"), TEXT("m"), EffectiveRadiusM, OutError)) { return false; }
 
 		NominalLoadN = InNominalLoadN;
@@ -207,6 +220,144 @@ namespace ZN6
 	double FTire::MaxLongitudinalForceN(double FzN) const
 	{
 		return Mu(FzN) * FMath::Max(FzN, 0.0);
+	}
+
+	void FTire::ForcesN(double FzN, double InSlipRatio, double InSlipAngleRad,
+	                    double& OutFxN, double& OutFyN) const
+	{
+		OutFxN = 0.0;
+		OutFyN = 0.0;
+
+		if (FzN <= 0.0)
+		{
+			return;
+		}
+
+		const double MuValue = Mu(FzN);
+		const double FMax = MuValue * FzN;
+		if (FMax <= 0.0)
+		{
+			return;
+		}
+
+		const double CKappa = LongitudinalStiffnessPerLoad * FzN;
+		const double CAlpha = CorneringStiffnessPerLoad * FzN;
+
+		const double FxLinear = CKappa * InSlipRatio;
+		const double FyLinear = -CAlpha * std::tan(InSlipAngleRad);
+
+		// **hypot を使うこと。** sqrt(x*x + y*y) では丸めが変わる（上の注記）。
+		const double FLinear = std::hypot(FxLinear, FyLinear);
+		if (FLinear < 1e-9)
+		{
+			return;
+		}
+
+		const double Z = FLinear / (3.0 * FMax);
+		const double FTotal = (Z < 1.0)
+			? FMax * (3.0 * Z - 3.0 * Z * Z + Z * Z * Z)
+			: FMax;
+
+		// **向きは線形力のベクトル方向を保つ。** これにより摩擦円の拘束が
+		// 縦横で自動的に共有される（複合スリップ）。
+		const double Scale = FTotal / FLinear;
+		OutFxN = FxLinear * Scale;
+		OutFyN = FyLinear * Scale;
+	}
+
+	double FTire::SlipRatio(double WheelOmegaRads, double RadiusM, double ContactSpeedMps)
+	{
+		const double WheelSpeed = WheelOmegaRads * RadiusM;
+		const double Denominator = FMath::Max(FMath::Abs(ContactSpeedMps), 0.5);
+		return (WheelSpeed - ContactSpeedMps) / Denominator;
+	}
+
+	double FTire::SlipAngleRad(double LateralSpeedMps, double LongitudinalSpeedMps)
+	{
+		return std::atan2(LateralSpeedMps, FMath::Max(FMath::Abs(LongitudinalSpeedMps), 0.5));
+	}
+
+	// =======================================================================
+	// FClutch
+	// =======================================================================
+
+	bool FClutch::Init(FVehicleData& Data, FString& OutError)
+	{
+		return Data.GetValue(TEXT("transmission.clutch_capacity"), TEXT("N*m"), CapacityNm, OutError);
+	}
+
+	// =======================================================================
+	// FBrakes
+	// =======================================================================
+
+	bool FBrakes::Init(FVehicleData& Data, FString& OutError)
+	{
+		if (!Data.GetValue(TEXT("brakes.brake_bias"), TEXT("-"), BiasFront, OutError)) { return false; }
+		if (!Data.GetValue(TEXT("brakes.max_brake_torque_total"), TEXT("N*m"), MaxTotalTorqueNm, OutError)) { return false; }
+		if (!Data.GetValue(TEXT("brakes.handbrake_torque_rear"), TEXT("N*m"), HandbrakeTorqueNm, OutError)) { return false; }
+		return true;
+	}
+
+	void FBrakes::AxleTorquesNm(double Pedal, double& OutFrontNm, double& OutRearNm) const
+	{
+		checkf(Pedal >= 0.0 && Pedal <= 1.0, TEXT("pedal は 0.0-1.0。受け取った値: %f"), Pedal);
+		const double Total = MaxTotalTorqueNm * Pedal;
+		OutFrontNm = Total * BiasFront;
+		OutRearNm = Total * (1.0 - BiasFront);
+	}
+
+	double FBrakes::HandbrakeAxleTorqueNm(double Lever) const
+	{
+		checkf(Lever >= 0.0 && Lever <= 1.0, TEXT("lever は 0.0-1.0。受け取った値: %f"), Lever);
+		return HandbrakeTorqueNm * Lever;
+	}
+
+	// =======================================================================
+	// FDifferential
+	// =======================================================================
+
+	namespace
+	{
+		// ロックの立ち上がりを滑らかにする回転差のスケール [rad/s]。
+		// 小さくすると数値的に硬くなり、積分が不安定になる。
+		constexpr double LockSmoothingRads = 1.5;
+	}
+
+	bool FDifferential::Init(FVehicleData& Data, bool bInUseLsd, FString& OutError)
+	{
+		bUseLsd = bInUseLsd;
+		if (!bUseLsd)
+		{
+			return true;  // Open Diff はパラメータを持たない（比較基準）
+		}
+
+		if (!Data.GetValue(TEXT("differential.preload"), TEXT("N*m"), PreloadNm, OutError)) { return false; }
+		if (!Data.GetValue(TEXT("differential.accel_lock_ratio"), TEXT("-"), AccelLockRatio, OutError)) { return false; }
+		if (!Data.GetValue(TEXT("differential.decel_lock_ratio"), TEXT("-"), DecelLockRatio, OutError)) { return false; }
+		return true;
+	}
+
+	void FDifferential::SplitTorqueNm(double TotalTorqueNm, double OmegaLeftRads, double OmegaRightRads,
+	                                  double& OutLeftNm, double& OutRightNm) const
+	{
+		const double Half = TotalTorqueNm / 2.0;
+
+		if (!bUseLsd)
+		{
+			OutLeftNm = Half;
+			OutRightNm = Half;
+			return;
+		}
+
+		const double LockRatio = (TotalTorqueNm >= 0.0) ? AccelLockRatio : DecelLockRatio;
+		const double CapacityNm = PreloadNm + LockRatio * FMath::Abs(TotalTorqueNm);
+
+		// 速い側が正になるようにとり、**速い側から遅い側へ**トルクを移す
+		const double OmegaDifference = OmegaLeftRads - OmegaRightRads;
+		const double TransferNm = CapacityNm * std::tanh(OmegaDifference / LockSmoothingRads);
+
+		OutLeftNm = Half - TransferNm;
+		OutRightNm = Half + TransferNm;
 	}
 
 	// =======================================================================
