@@ -14,6 +14,7 @@
 #include "Engine/World.h"
 #include "HAL/PlatformTime.h"
 
+#include "Physics/ZN6Units.h"
 #include "ZN6VehicleActor.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -531,6 +532,86 @@ bool FZN6DriverInputIsSane::RunTest(const FString& Parameters)
 		*FString::Printf(TEXT("離すと中立へ戻る（%.5f rad）"),
 		                 Actor->GetControl().SteerRad),
 		FMath::Abs(Actor->GetControl().SteerRad) < 1e-6);
+
+	DestroyWorld(World);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// アクセルを踏んだら実際に走り出すか
+// ---------------------------------------------------------------------------
+//
+// **「操作が物理の入力に変換される」ことと「車が走る」ことは別。**
+// 変換が正しくても、ギアやクラッチの初期値、発進時の数値不安定（issue #24）
+// で動かないことがありうる。人がキーを押さないと分からない状態にしない。
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6CarActuallyDrives,
+	"ZN6.Tick.アクセルを踏むと発進する",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6CarActuallyDrives::RunTest(const FString& Parameters)
+{
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	// 実際の起動時と同じ状態から始める。**停止・1速・クラッチは繋がったまま。**
+	Actor->ResetToStart();
+
+	const double StartX = Actor->GetPhysicsState().XM;
+	constexpr float FrameDt = 1.0f / 60.0f;
+
+	// --- 全開で 5 秒 ---
+	Actor->SetThrottleInputForTest(1.0f);
+	for (int32 Frame = 0; Frame < 300; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(FrameDt);
+		Actor->AdvancePhysics(FrameDt);
+	}
+
+	const ZN6::FVehicleState& Moving = Actor->GetPhysicsState();
+	const double Travelled = Moving.XM - StartX;
+	const double SpeedKmh = Moving.SpeedMps() * ZN6::KmhPerMps;
+
+	// **しきい値は緩くてよい。** ここで見たいのは「動くか」であって
+	// 加速性能ではない（それは ZN6.Physics の 0-100km/h が見ている）。
+	TestTrue(
+		*FString::Printf(TEXT("5秒の全開で前進する（%.1f m）"), Travelled),
+		Travelled > 5.0);
+	TestTrue(
+		*FString::Printf(TEXT("速度が乗る（%.1f km/h）"), SpeedKmh),
+		Moving.SpeedMps() > 5.0);
+
+	// 前進していること。**後退していたらギアか符号が逆。**
+	TestTrue(
+		*FString::Printf(TEXT("前向きに進む（vx = %.2f m/s）"), Moving.VxMps),
+		Moving.VxMps > 0.0);
+
+	AddInfo(FString::Printf(
+		TEXT("5秒全開: %.1f m 進み %.1f km/h（%d速、エンジン %.0f rpm）"),
+		Travelled, SpeedKmh, Actor->GetControl().GearIndex + 1,
+		ZN6::RadsToRpm(Moving.EngineOmegaRads)));
+
+	// --- ブレーキで減速するか ---
+	const double BeforeBrakeMps = Moving.SpeedMps();
+	Actor->SetThrottleInputForTest(0.0f);
+	Actor->SetBrakeInputForTest(1.0f);
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(FrameDt);
+		Actor->AdvancePhysics(FrameDt);
+	}
+
+	const double AfterBrakeMps = Actor->GetPhysicsState().SpeedMps();
+	TestTrue(
+		*FString::Printf(TEXT("ブレーキで減速する（%.1f -> %.1f m/s）"),
+		                 BeforeBrakeMps, AfterBrakeMps),
+		AfterBrakeMps < BeforeBrakeMps);
 
 	DestroyWorld(World);
 	return true;

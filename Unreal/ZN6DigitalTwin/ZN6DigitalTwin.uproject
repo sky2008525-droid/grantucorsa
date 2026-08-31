@@ -1,34 +1,39 @@
-{
-	"FileVersion": 3,
-	"EngineAssociation": "5.8",
-	"Category": "",
-	"Description": "grantucorsa — ZN6 Digital Twin — Phase 8 UE5 integration",
-	"Modules": [
-		{
-			"Name": "ZN6DigitalTwin",
-			"Type": "Runtime",
-			"LoadingPhase": "Default"
-		}
-	],
-	"Plugins": [
-		{
-			"Name": "PythonScriptPlugin",
-			"Enabled": true,
-			"_comment": "レベル構築を自動化するため。GUI 操作を手順書にしない（Blender と同じ方針）"
-		},
-		{
-			"Name": "EditorScriptingUtilities",
-			"Enabled": true
-		},
-		{
-			"Name": "InterchangeEditor",
-			"Enabled": true,
-			"_comment": "glTF / FBX の取り込み。PolyHaven のアセットは glTF で来る"
-		},
-		{
-			"Name": "HDRIBackdrop",
-			"Enabled": true,
-			"_comment": "HDRI を『見える空』として使う。SkyLight だけでは背景が描かれない"
-		}
-	]
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "grantucorsa — ZN6 Digital Twin — Phase 8 UE5 integration",
+	"Modules": [
+		{
+			"Name": "ZN6DigitalTwin",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "PythonScriptPlugin",
+			"Enabled": true,
+			"_comment": "レベル構築を自動化するため。GUI 操作を手順書にしない（Blender と同じ方針）"
+		},
+		{
+			"Name": "EditorScriptingUtilities",
+			"Enabled": true
+		},
+		{
+			"Name": "InterchangeEditor",
+			"Enabled": true,
+			"_comment": "glTF / FBX の取り込み。PolyHaven のアセットは glTF で来る",
+			"SupportedTargetPlatforms": [
+				"Win64",
+				"Linux",
+				"Mac"
+			]
+		},
+		{
+			"Name": "HDRIBackdrop",
+			"Enabled": true,
+			"_comment": "HDRI を『見える空』として使う。SkyLight だけでは背景が描かれない"
+		}
+	]
 }

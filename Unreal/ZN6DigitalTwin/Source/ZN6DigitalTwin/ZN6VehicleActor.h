@@ -197,6 +197,7 @@ public:
 	void ShiftDownForTest() { ShiftDown(); }
 	void SetSteerInputForTest(float Value) { RawSteer = Value; }
 	void SetThrottleInputForTest(float Value) { RawThrottle = Value; }
+	void SetBrakeInputForTest(float Value) { RawBrake = Value; }
 	void ApplyDriverInputForTest(float DeltaSeconds) { ApplyDriverInput(DeltaSeconds); }
 
 protected:
