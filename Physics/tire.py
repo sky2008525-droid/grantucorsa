@@ -94,6 +94,45 @@ class Tire:
         scale = f_total / f_linear
         return fx_linear * scale, fy_linear * scale
 
+    def longitudinal_slope_n_per_slip(
+        self, fz_n: float, slip_ratio: float, slip_angle_rad: float
+    ) -> float:
+        """その動作点での dFx/dkappa [N]（接線剛性）。
+
+        **車輪回転を半陰的に積分するために要る**（issue #24）。
+
+        飽和則 F = mu*Fz*(3z - 3z^2 + z^3) を f_linear で微分すると
+
+            dF/df_linear = (1 - z)^2
+
+        なので、接線剛性は線形域の c_kappa をこの係数で縮めたものになる。
+        飽和しきる（z >= 1）と 0。
+
+        **線形域の c_kappa をそのまま使ってはいけない。** 飽和している
+        ときの実際の勾配はずっと小さく、それを使うと半陰的な積分が
+        過剰に減衰する。実際、発進 2 秒後の速度が刻みによって
+        3.13 / 4.19 m/s と食い違った。
+        """
+        if fz_n <= 0.0:
+            return 0.0
+
+        mu = self.mu(fz_n)
+        f_max = mu * fz_n
+        if f_max <= 0.0:
+            return 0.0
+
+        c_kappa = self.longitudinal_stiffness_per_load * fz_n
+        c_alpha = self.cornering_stiffness_per_load * fz_n
+
+        fx_linear = c_kappa * slip_ratio
+        fy_linear = -c_alpha * math.tan(slip_angle_rad)
+        f_linear = math.hypot(fx_linear, fy_linear)
+
+        z = f_linear / (3.0 * f_max)
+        if z >= 1.0:
+            return 0.0
+        return c_kappa * (1.0 - z) ** 2
+
     def max_longitudinal_force_n(self, fz_n: float) -> float:
         """その荷重で出せる縦力の上限 [N]（摩擦円の半径）。"""
         return self.mu(fz_n) * max(fz_n, 0.0)

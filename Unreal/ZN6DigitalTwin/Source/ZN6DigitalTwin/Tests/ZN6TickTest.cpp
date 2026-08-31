@@ -656,10 +656,15 @@ bool FZN6BodyAttitudeFollowsLoadTransfer::RunTest(const FString& Parameters)
 	TestTrue(
 		*FString::Printf(TEXT("左旋回で横加速度が正（%.2f m/s^2）"), Ay),
 		Ay > 0.5);
-	// **符号が逆だと内側へ傾く。** 見ればすぐ分かるが、見ない限り分からない。
+	// **符号が逆だと内側へ傾く。**
+	//
+	// UE の正の Roll は右側が下がる。左旋回では外側（右）が下がるので正。
+	// **ここは一度間違えた。** 私が「負が外側」と思い込み、その思い込みを
+	// そのまま assert に書いたので、内側へ傾いたままテストが通った。
+	// 実際に走らせて指摘されるまで気づけなかった。
 	TestTrue(
-		*FString::Printf(TEXT("左旋回では外側へ傾く（ロール %.3f rad）"), Roll),
-		Roll < -0.001);
+		*FString::Printf(TEXT("左旋回では外側（右＝正のロール）へ傾く（%.3f rad）"), Roll),
+		Roll > 0.001);
 
 	// --- 加速でノーズが上がるか ---
 	Actor->ResetToStart();

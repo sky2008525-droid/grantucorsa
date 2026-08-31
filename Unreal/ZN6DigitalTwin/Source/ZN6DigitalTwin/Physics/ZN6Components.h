@@ -146,6 +146,19 @@ namespace ZN6
 		void ForcesN(double FzN, double SlipRatio, double SlipAngleRad,
 		             double& OutFxN, double& OutFyN) const;
 
+		/**
+		 * その動作点での dFx/dkappa [N]（接線剛性）。
+		 *
+		 * **車輪回転を半陰的に積分するために要る**（issue #24）。
+		 * 飽和則を f_linear で微分すると dF/df_linear = (1-z)^2 になるので、
+		 * 接線剛性は線形域の c_kappa をこの係数で縮めたもの。
+		 *
+		 * **線形域の c_kappa をそのまま使ってはいけない。** 飽和している
+		 * ときの実際の勾配はずっと小さく、使うと積分が過剰に減衰する。
+		 */
+		double LongitudinalSlopeNPerSlip(double FzN, double InSlipRatio,
+		                                 double InSlipAngleRad) const;
+
 		/** スリップ率 kappa = (omega*r - v) / max(|v|, 0.5)。駆動時は正。 */
 		static double SlipRatio(double WheelOmegaRads, double RadiusM, double ContactSpeedMps);
 

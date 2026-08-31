@@ -266,7 +266,37 @@ class Vehicle:
 
             brake = math.copysign(brake_torque[wheel], omega) if abs(omega) > 0.1 else 0.0
             omega_dot = (drive_torque[wheel] - brake - fx_w * self.wheel_radius_m) / inertia
-            omega_new = omega + omega_dot * dt_s
+
+            # 半陰的に積分する（issue #24）。
+            #
+            # **陽解法だと低速で毎ステップ振動する。** fx は omega に
+            # 依存する（kappa = (omega*r - v)/max(|v|,0.5)）のに、その
+            # 依存を陽に扱っていたため。安定条件は
+            #
+            #     dt < 2*I / (C_kappa * r^2) * max(|v|, 0.5)
+            #
+            # で、スリップ率の分母が下限 0.5 を持つぶん低速ほど実効剛性が
+            # 上がり、静止発進には dt < 0.19 ms が要った（既定は 2 ms）。
+            #
+            # fx の omega 依存を線形化して陰的に解く:
+            #
+            #     d = dt/I * (T - r*fx(omega))
+            #     omega_new = omega + d / (1 + dt*r*k/I)      k = d(fx)/d(omega)
+            #
+            # k はその動作点での**接線剛性**を使う。線形域の c_kappa を
+            # そのまま使うと、飽和している発進時に過剰減衰し、刻みに
+            # よって速度が食い違った（2秒後 3.13 / 4.19 m/s）。
+            #
+            # **定常解は陽解法と同じ。** 分母は増分に掛かるだけで、
+            # 増分がゼロになる条件（T = r*fx）を変えない。したがって
+            # 収束していた結果（0-100km/h 等）は動かず、振動していた
+            # 領域だけが直る。
+            d_fx_d_kappa = self.tire.longitudinal_slope_n_per_slip(
+                fz[wheel], kappa, alpha
+            )
+            d_fx_d_omega = d_fx_d_kappa * self.wheel_radius_m / max(abs(vx_w), 0.5)
+            damping = 1.0 + dt_s * self.wheel_radius_m * d_fx_d_omega / inertia
+            omega_new = omega + omega_dot * dt_s / damping
 
             # 制動でゼロを跨いだらロックさせる（逆回転させない）
             if control.brake > 0.0 and omega * omega_new < 0.0:

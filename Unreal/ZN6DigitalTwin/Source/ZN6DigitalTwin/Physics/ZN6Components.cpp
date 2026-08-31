@@ -265,6 +265,36 @@ namespace ZN6
 		OutFyN = FyLinear * Scale;
 	}
 
+	double FTire::LongitudinalSlopeNPerSlip(double FzN, double InSlipRatio,
+	                                        double InSlipAngleRad) const
+	{
+		if (FzN <= 0.0)
+		{
+			return 0.0;
+		}
+
+		const double FMax = Mu(FzN) * FzN;
+		if (FMax <= 0.0)
+		{
+			return 0.0;
+		}
+
+		const double CKappa = LongitudinalStiffnessPerLoad * FzN;
+		const double CAlpha = CorneringStiffnessPerLoad * FzN;
+
+		const double FxLinear = CKappa * InSlipRatio;
+		const double FyLinear = -CAlpha * std::tan(InSlipAngleRad);
+		// **hypot を使うこと。** Python 側と丸めを揃える。
+		const double FLinear = std::hypot(FxLinear, FyLinear);
+
+		const double Z = FLinear / (3.0 * FMax);
+		if (Z >= 1.0)
+		{
+			return 0.0;
+		}
+		return CKappa * (1.0 - Z) * (1.0 - Z);
+	}
+
 	double FTire::SlipRatio(double WheelOmegaRads, double RadiusM, double ContactSpeedMps)
 	{
 		const double WheelSpeed = WheelOmegaRads * RadiusM;

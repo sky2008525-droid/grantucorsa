@@ -267,12 +267,14 @@ def place_lighting():
     なるが空が見えない）。HDRIBackdrop は HDRI を見える空として貼りつつ
     ライティングにも使う。
     """
+    # **太陽を高くする。** 低いと車体の影側が真っ黒になり、
+    # そこにある車輪が見えない（実際に「タイヤが見えない」と指摘された）。
     sun = spawn_class(unreal.DirectionalLight, unreal.Vector(0.0, 0.0, 5000.0),
-                      unreal.Rotator(0.0, -42.0, 30.0), "Sun")
+                      unreal.Rotator(0.0, -58.0, 35.0), "Sun")
     if sun is not None:
         # **SkyAtmosphere の太陽として使う。** これを立てないと空が
         # 昼にならない（太陽の位置が空の色を決めている）。
-        sun.light_component.set_intensity(6.0)
+        sun.light_component.set_intensity(10.0)
         sun.light_component.set_editor_property("atmosphere_sun_light", True)
 
     # **霧は薄くする。** 既定の密度 0.02 のままだと、コース規模
@@ -302,7 +304,9 @@ def place_lighting():
         component.set_editor_property("source_type",
                                       unreal.SkyLightSourceType.SLS_CAPTURED_SCENE)
         component.set_editor_property("real_time_capture", True)
-        component.set_editor_property("intensity", 1.0)
+        # **環境光を効かせる。** 1.0 だと影側に光が回らず、
+        # 車体の陰にある車輪が黒く潰れて見えなくなる。
+        component.set_editor_property("intensity", 3.0)
 
     log("空: SkyAtmosphere=%s / SkyLight=%s"
         % (atmosphere is not None, sky_light is not None))
@@ -335,13 +339,28 @@ def place_vehicle(root):
         by_name["BodyMesh"].set_static_mesh(body)
         assigned += 1
 
+    # 車輪の取り付け位置は manifest が持っている。**ここで焼き込む。**
+    #
+    # 実行時（BeginPlay）にも読むが、**エディタでは BeginPlay が走らない**
+    # ので、レベル側で設定しておかないと4輪とも原点に重なる。実際それで
+    # 車体にタイヤが埋まった状態になっていた。
+    with open(os.path.join(root, "Vehicles", "ZN6", "Export", "manifest.json"),
+              encoding="utf-8") as handle:
+        manifest = json.load(handle)
+
     for name in ("FL", "FR", "RL", "RR"):
         mesh = find_asset("%s/wheel_%s" % (PKG_VEHICLE, name),
                           "ZN6_wheel_%s" % name, unreal.StaticMesh)
         component = by_name.get("Wheel" + name)
-        if mesh is not None and component is not None:
-            component.set_static_mesh(mesh)
-            assigned += 1
+        if mesh is None or component is None:
+            unreal.log_error("[ZN6 level] 車輪 %s を割り当てられない" % name)
+            continue
+
+        component.set_static_mesh(mesh)
+        attach = manifest["parts"]["wheel_%s" % name]["attach_m"]
+        component.set_relative_location(
+            to_ue_location(attach[0], attach[1], attach[2]), False, False)
+        assigned += 1
 
     # **この車をプレイヤーが操作する。**
     #

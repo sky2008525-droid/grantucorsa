@@ -294,8 +294,16 @@ void AZN6VehicleActor::AdvanceVisualAttitude(double DtS)
 	const double Zeta = AttitudeFeel.DampingRatio;
 
 	// ay が正 = 左向き加速 = 左旋回。車体は外側（右）へ傾く。
+	//
+	// **UE の正の Roll は右側が下がる**（左手系で +X 軸まわりに時計回り）。
+	// 左旋回で右側を下げたいので符号は正。
+	//
+	// 最初これを負にしていて、旋回の内側へ傾いていた。**しかもテストは
+	// 通っていた** — 私が「負が外側」と思い込んで、その思い込みを
+	// そのまま assert に書いたため。実際に走らせて指摘されるまで
+	// 気づけなかった。**符号は目で確かめること。**
 	const double TargetRollRad = FMath::DegreesToRadians(
-		-AttitudeFeel.RollDegPerG * PhysicsOutputs.AyMps2 / ZN6::GravityMps2);
+		AttitudeFeel.RollDegPerG * PhysicsOutputs.AyMps2 / ZN6::GravityMps2);
 
 	// ax が正 = 加速。車体は後ろへ沈む = 機首上げ。
 	const double TargetPitchRad = FMath::DegreesToRadians(
@@ -360,11 +368,6 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 		BodyMesh->SetRelativeRotation(BodyTilt);
 	}
 
-	if (!bVisualManifestLoaded)
-	{
-		return;
-	}
-
 	const double SteerDeg = -FMath::RadiansToDegrees(Control.SteerRad);
 
 	for (int32 Index = 0; Index < ZN6::WheelCount; ++Index)
@@ -374,11 +377,22 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 			continue;
 		}
 
-		const FVector& Attach = WheelAttachM[Index];
-		WheelMeshes[Index]->SetRelativeLocation(FVector(
-			Attach.X * MetresToCentimetres,
-			-Attach.Y * MetresToCentimetres,
-			Attach.Z * MetresToCentimetres));
+		// **取り付け位置はレベル側で設定済み**（build_level.py が manifest から
+		// 書き込む）。ここで上書きするのは、実行時に manifest を読めた場合だけ。
+		//
+		// 以前はここでしか位置を設定しておらず、**エディタでは BeginPlay が
+		// 走らないので4輪とも原点に重なって車体に埋まっていた。**
+		// メッシュもマテリアルも正常で `is_visible()` も True なので、
+		// 調べても異常が見えない。実際に走らせて「タイヤが見えない」と
+		// 指摘されるまで気づけなかった。
+		if (bVisualManifestLoaded)
+		{
+			const FVector& Attach = WheelAttachM[Index];
+			WheelMeshes[Index]->SetRelativeLocation(FVector(
+				Attach.X * MetresToCentimetres,
+				-Attach.Y * MetresToCentimetres,
+				Attach.Z * MetresToCentimetres));
+		}
 
 		// **転がりは負のピッチ。** UE の正ピッチは +X を +Z へ回す
 		// （機首上げ）ので、車輪の頂点が後ろへ動く = 後転になる。

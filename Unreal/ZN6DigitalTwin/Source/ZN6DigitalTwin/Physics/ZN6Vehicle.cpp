@@ -287,7 +287,27 @@ namespace ZN6
 				: 0.0;
 
 			const double OmegaDot = (DriveTorque[Wheel] - Brake - FxW * WheelRadiusM) / Inertia;
-			double OmegaNew = Omega + OmegaDot * DtS;
+
+			// 半陰的に積分する（issue #24）。**Python 版と同じ式にすること。**
+			//
+			// 陽解法だと低速で毎ステップ振動した。fx は omega に依存する
+			// （kappa = (omega*r - v)/max(|v|,0.5)）のに、その依存を陽に
+			// 扱っていたため。静止発進 dt=0.002 で符号反転 284/299 回。
+			//
+			// fx の omega 依存を線形化して陰的に解く:
+			//
+			//     d = dt/I * (T - r*fx(omega))
+			//     omega_new = omega + d / (1 + dt*r*k/I)   k = d(fx)/d(omega)
+			//
+			// k は動作点での**接線剛性**。線形域の c_kappa を使うと、
+			// 飽和している発進時に過剰減衰する。
+			//
+			// **定常解は陽解法と同じ。** 分母は増分に掛かるだけで、
+			// 増分がゼロになる条件（T = r*fx）を変えない。
+			const double DFxDKappa = Tire.LongitudinalSlopeNPerSlip(Fz[Wheel], Kappa, Alpha);
+			const double DFxDOmega = DFxDKappa * WheelRadiusM / FMath::Max(FMath::Abs(VxW), 0.5);
+			const double Damping = 1.0 + DtS * WheelRadiusM * DFxDOmega / Inertia;
+			double OmegaNew = Omega + OmegaDot * DtS / Damping;
 
 			// 制動でゼロを跨いだらロックさせる（逆回転させない）
 			if (Control.Brake > 0.0 && Omega * OmegaNew < 0.0)
