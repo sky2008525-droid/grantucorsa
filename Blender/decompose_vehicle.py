@@ -216,25 +216,33 @@ def to_output_frame(obj, origin_model, scale):
     obj.matrix_world = Matrix.Identity(4)
 
 
-def export_fbx(objects, path):
+def export_glb(objects, path):
+    """glTF(.glb) で書き出す。**FBX ではない。**
+
+    FBX に `embed_textures=True` で埋め込んだテクスチャは、UE5 の
+    Interchange が取り出せなかった（「無効なトランスレータでペイロードを
+    取得できませんでした」が5枚とも出る）。メッシュとマテリアルは入るが、
+    **テクスチャだけ静かに欠ける。**
+
+    同じ経路で PolyHaven の樹木（glTF）はテクスチャまで完全に入っている
+    ので、車体も glTF に揃える。
+
+    座標系は Blender のものをそのまま出す（既に物理座標系へ変換済み）。
+    glTF は Y-up が規約なので `+Y Up` 変換が入り、UE 側の取り込みで
+    元に戻る。**ここで UE の都合を先取りして回さないこと。**
+    """
     bpy.ops.object.select_all(action="DESELECT")
     for obj in objects:
         obj.select_set(True)
     bpy.context.view_layer.objects.active = objects[0]
-    bpy.ops.export_scene.fbx(
+    bpy.ops.export_scene.gltf(
         filepath=path,
+        export_format="GLB",
         use_selection=True,
-        apply_unit_scale=True,
-        global_scale=1.0,
-        # **Blender の座標をそのまま出す。** 既に物理座標系へ変換済みで、
-        # UE 側の Y 反転（右手系 -> 左手系）だけが残るのが正しい状態。
-        axis_forward="X",
-        axis_up="Z",
-        mesh_smooth_type="FACE",
-        use_mesh_modifiers=True,
-        bake_space_transform=False,
-        path_mode="COPY",
-        embed_textures=True,
+        export_yup=True,
+        export_apply=True,
+        export_texture_dir="",
+        export_materials="EXPORT",
     )
 
 
@@ -367,7 +375,7 @@ def main():
 
     lo_b, hi_b = world_bbox(body)
     manifest["parts"]["body"] = {
-        "file": "ZN6_body.fbx",
+        "file": "ZN6_body.glb",
         "bbox_lo_m": list(lo_b), "bbox_hi_m": list(hi_b),
         "tris": sum(len(p.vertices) - 2 for p in body.data.polygons),
     }
@@ -395,7 +403,7 @@ def main():
         ]
 
         manifest["parts"]["wheel_%s" % name] = {
-            "file": "ZN6_wheel_%s.fbx" % name,
+            "file": "ZN6_wheel_%s.glb" % name,
             "attach_m": attach,
             "attach_note": "ボディ原点からの位置 [m]（X 前方 / Y 左 / Z 上）",
             "bbox_lo_m": list(lo_w), "bbox_hi_m": list(hi_w),
@@ -411,9 +419,9 @@ def main():
             ",".join("%+.4f" % v for v in attach))
 
     # --- 書き出し ---------------------------------------------------------
-    export_fbx([body], os.path.join(out_dir, "ZN6_body.fbx"))
+    export_glb([body], os.path.join(out_dir, "ZN6_body.glb"))
     for name, wheel in wheel_objects.items():
-        export_fbx([wheel], os.path.join(out_dir, "ZN6_wheel_%s.fbx" % name))
+        export_glb([wheel], os.path.join(out_dir, "ZN6_wheel_%s.glb" % name))
 
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)

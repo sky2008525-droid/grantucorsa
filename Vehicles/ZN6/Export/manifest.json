@@ -5,7 +5,7 @@
   "body_origin": "重心の真下・接地面 (cg_longitudinal_from_front_axle=1.208 m)",
   "parts": {
     "body": {
-      "file": "ZN6_body.fbx",
+      "file": "ZN6_body.glb",
       "bbox_lo_m": [
         -2.179572582244873,
         -0.9928652048110962,
@@ -19,7 +19,7 @@
       "tris": 134276
     },
     "wheel_FL": {
-      "file": "ZN6_wheel_FL.fbx",
+      "file": "ZN6_wheel_FL.glb",
       "attach_m": [
         1.2079462432577708,
         0.7707357769561965,
@@ -42,7 +42,7 @@
       "tris": 4460
     },
     "wheel_FR": {
-      "file": "ZN6_wheel_FR.fbx",
+      "file": "ZN6_wheel_FR.glb",
       "attach_m": [
         1.2079462432577708,
         -0.7707355512441433,
@@ -65,7 +65,7 @@
       "tris": 4460
     },
     "wheel_RL": {
-      "file": "ZN6_wheel_RL.fbx",
+      "file": "ZN6_wheel_RL.glb",
       "attach_m": [
         -1.3616919515028962,
         0.7723087539016978,
@@ -88,7 +88,7 @@
       "tris": 4460
     },
     "wheel_RR": {
-      "file": "ZN6_wheel_RR.fbx",
+      "file": "ZN6_wheel_RR.glb",
       "attach_m": [
         -1.3616919515028962,
         -0.7723084909160945,
