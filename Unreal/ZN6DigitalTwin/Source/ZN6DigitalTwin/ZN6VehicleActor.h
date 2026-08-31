@@ -517,6 +517,19 @@ private:
 	/** メニュー。**開いている間だけ入力を取る。** */
 	TSharedPtr<class SZN6Menu> Menu;
 
+	/**
+	 * 入力モードをメニューの開閉に合わせる。
+	 *
+	 * **これが無いとメニューが一切操作できない。** -game では
+	 * PlayerController が入力を持っていくので、ビューポートに足しただけの
+	 * Slate ウィジェットにはキーが届かない。
+	 */
+	void SyncInputModeToMenu();
+
+	/** まだ入力モードを当てられていない（PlayerController が居なかった）。 */
+	bool bInputModeDirty = true;
+	bool bInputModeAppliedForOpen = false;
+
 	/** 今のセッティングと、その調整範囲。 */
 	ZN6::FCarSetup Setup;
 	ZN6::FSetupLimits SetupLimits;

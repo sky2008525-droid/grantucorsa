@@ -3,8 +3,12 @@
 // **HUD と同じく Slate で直接描く。** .uasset を作らないので、
 // 画面の変更が全部ソースの差分として残る。
 //
-// 操作はキーボードだけで完結させる。**マウスが要る画面にしない**のは、
-// ハンドルから手を離さずに設定を変えられるようにするため。
+// **キーボードとマウスの両方で操作できる。**
+//
+// 最初はキーボードだけにしていた（ハンドルから手を離さずに設定を変えたい
+// ため）。だが Slate にフォーカスが渡っていないと完全に詰むことが分かった。
+// 実際に「メニューが操作できない」状態になっている。
+// **入力の経路をひとつしか持たない画面を作らないこと。**
 //
 // このウィジェットは**車を知らない。** 何かを決めたらデリゲートで
 // 外へ伝えるだけで、物理も描画も自分では触らない。
@@ -67,6 +71,14 @@ public:
 	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Key) override;
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 
+	// **マウスでも操作できるようにする。**
+	// キーボードだけだと、フォーカスが取れていないときに完全に詰む。
+	// 実際それで「メニューが操作できない」状態になった。
+	virtual FReply OnMouseButtonDown(const FGeometry& Geometry,
+	                                 const FPointerEvent& Mouse) override;
+	virtual FReply OnMouseMove(const FGeometry& Geometry,
+	                           const FPointerEvent& Mouse) override;
+
 	virtual FVector2D ComputeDesiredSize(float) const override
 	{
 		return FVector2D(1920.0, 1080.0);
@@ -126,4 +138,18 @@ private:
 	FZN6SetupChanged OnSetupChanged;
 
 	const FSlateBrush* WhiteBrush = nullptr;
+
+	/**
+	 * 行ごとの当たり判定の矩形。**描画のときに詰める。**
+	 *
+	 * 描く場所と当たり判定を別々に計算すると、必ずどこかでずれる。
+	 * 同じ計算から作るために、描画中に覚えておく。
+	 */
+	mutable TArray<FSlateRect> RowRects;
+	/** 値を減らす / 増やす領域。行と同じ添字。調整できない行は空。 */
+	mutable TArray<FSlateRect> LeftArrowRects;
+	mutable TArray<FSlateRect> RightArrowRects;
+
+	/** その点がどの行か。無ければ -1。 */
+	int32 RowAtPosition(const FGeometry& Geometry, const FVector2D& Screen) const;
 };

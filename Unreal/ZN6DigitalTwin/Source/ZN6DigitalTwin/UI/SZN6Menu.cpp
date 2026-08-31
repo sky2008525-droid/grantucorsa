@@ -203,6 +203,81 @@ FReply SZN6Menu::OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Key)
 	return FReply::Handled();
 }
 
+int32 SZN6Menu::RowAtPosition(const FGeometry& Geometry,
+                              const FVector2D& Screen) const
+{
+	const FVector2D Local = Geometry.AbsoluteToLocal(Screen);
+	for (int32 Index = 0; Index < RowRects.Num(); ++Index)
+	{
+		if (RowRects[Index].ContainsPoint(FVector2f(Local)))
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
+}
+
+FReply SZN6Menu::OnMouseMove(const FGeometry& Geometry, const FPointerEvent& Mouse)
+{
+	if (!bOpen)
+	{
+		return FReply::Unhandled();
+	}
+
+	// **重ねた行を選択状態にする。** キーボードの選択と同じ場所を使うので、
+	// マウスで指したあとキーボードに持ち替えても続きから動かせる。
+	const int32 Row = RowAtPosition(Geometry, Mouse.GetScreenSpacePosition());
+	if (Row != INDEX_NONE)
+	{
+		Selected = Row;
+	}
+	return FReply::Handled();
+}
+
+FReply SZN6Menu::OnMouseButtonDown(const FGeometry& Geometry, const FPointerEvent& Mouse)
+{
+	if (!bOpen)
+	{
+		return FReply::Unhandled();
+	}
+
+	// **押した時点でフォーカスを取り直す。** 何かの拍子に外れていても、
+	// クリックすればキーボードが効く状態に戻せる。
+	FReply Reply = FReply::Handled().SetUserFocus(SharedThis(this), EFocusCause::Mouse);
+
+	if (Mouse.GetEffectingButton() == EKeys::RightMouseButton)
+	{
+		GoBack();
+		return Reply;
+	}
+
+	const int32 Row = RowAtPosition(Geometry, Mouse.GetScreenSpacePosition());
+	if (Row == INDEX_NONE)
+	{
+		return Reply;
+	}
+	Selected = Row;
+
+	const FVector2f LocalF(Geometry.AbsoluteToLocal(Mouse.GetScreenSpacePosition()));
+
+	// 左右の帯を押したら値を増減。それ以外は決定。
+	if (LeftArrowRects.IsValidIndex(Row) && LeftArrowRects[Row].ContainsPoint(LocalF))
+	{
+		Adjust(-1);
+	}
+	else if (RightArrowRects.IsValidIndex(Row)
+	         && RightArrowRects[Row].ContainsPoint(LocalF))
+	{
+		Adjust(1);
+	}
+	else
+	{
+		Activate();
+	}
+
+	return Reply;
+}
+
 // ---------------------------------------------------------------------------
 // 画質設定
 
@@ -351,6 +426,12 @@ int32 SZN6Menu::PaintMain(const FGeometry& Geometry, FSlateWindowElementList& Ou
 	{
 		const bool bSelected = (Index == Selected);
 
+		// 押せる範囲。**描く矩形と同じ計算から作る。**
+		RowRects.Add(FSlateRect(Origin.X - 18.0f, Y - 4.0f,
+		                        Origin.X + Size.X * 0.62f, Y + 36.0f));
+		LeftArrowRects.Add(FSlateRect());     // メインには増減が無い
+		RightArrowRects.Add(FSlateRect());
+
 		if (bSelected)
 		{
 			// 選択中の行だけ、左に太い差し色の帯を出す
@@ -398,6 +479,23 @@ int32 SZN6Menu::PaintSlider(const FGeometry& Geometry, FSlateWindowElementList& 
 	// 目盛りの帯
 	const float BarY = Origin.Y + 22.0f;
 	const float BarWidth = Width - 110.0f;
+
+	// 押せる範囲。行全体で選択、帯の左半分/右半分で増減。
+	RowRects.Add(FSlateRect(Origin.X - 14.0f, Origin.Y - 6.0f,
+	                        Origin.X + Width, BarY + 14.0f));
+	if (bAdjustable)
+	{
+		LeftArrowRects.Add(FSlateRect(Origin.X, BarY - 8.0f,
+		                              Origin.X + BarWidth * 0.5f, BarY + 14.0f));
+		RightArrowRects.Add(FSlateRect(Origin.X + BarWidth * 0.5f, BarY - 8.0f,
+		                               Origin.X + BarWidth, BarY + 14.0f));
+	}
+	else
+	{
+		LeftArrowRects.Add(FSlateRect());
+		RightArrowRects.Add(FSlateRect());
+	}
+
 	Box(Out, Layer, Geometry, WhiteBrush, FVector2f(Origin.X, BarY),
 	    FVector2f(BarWidth, 4.0f), GaugeTrack());
 
@@ -509,6 +607,13 @@ int32 SZN6Menu::PaintGraphics(const FGeometry& Geometry, FSlateWindowElementList
 	for (int32 Row = 0; Row < GraphicsRowCount(); ++Row)
 	{
 		const bool bSelected = (Row == Selected);
+
+		// 行全体で選択、左半分/右半分で増減
+		RowRects.Add(FSlateRect(Origin.X - 14.0f, Y - 6.0f, Origin.X + Width, Y + 30.0f));
+		LeftArrowRects.Add(FSlateRect(Origin.X, Y - 6.0f,
+		                              Origin.X + Width * 0.5f, Y + 30.0f));
+		RightArrowRects.Add(FSlateRect(Origin.X + Width * 0.5f, Y - 6.0f,
+		                               Origin.X + Width, Y + 30.0f));
 		Text(Out, Layer, Geometry, GraphicsLabel(Row), FVector2f(Origin.X, Y),
 		     LabelFont(15), bSelected ? TextPrimary() : TextSecondary());
 		Text(Out, Layer, Geometry, GraphicsValue(Row),
@@ -615,6 +720,12 @@ int32 SZN6Menu::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometr
 		return LayerId;
 	}
 
+	// **当たり判定は毎フレーム描画から作り直す。**
+	// 描く場所と押せる場所を別々に計算すると、必ずどこかでずれる。
+	RowRects.Reset();
+	LeftArrowRects.Reset();
+	RightArrowRects.Reset();
+
 	const FVector2f Screen = FVector2f(AllottedGeometry.GetLocalSize());
 	int32 Layer = PaintChrome(AllottedGeometry, OutDrawElements, LayerId, Screen);
 
@@ -626,11 +737,13 @@ int32 SZN6Menu::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometr
 	{
 	case EPage::Main:
 		Layer = PaintMain(AllottedGeometry, OutDrawElements, Layer + 1, Origin, Size);
-		Hint = TEXT("W/S または ↑↓ で選択    Enter で決定    Esc で走行へ戻る");
+		Hint = TEXT("W/S・↑↓ で選択    Enter で決定    Esc で走行へ戻る"
+		            "    ／ マウスでも選べる（クリックで決定・右クリックで戻る）");
 		break;
 	case EPage::Setup:
 		Layer = PaintSetup(AllottedGeometry, OutDrawElements, Layer + 1, Origin, Size);
-		Hint = TEXT("↑↓ で項目    ←→ で increase/decrease    Esc で戻る"
+		Hint = TEXT("↑↓ で項目    ←→ で増減    Esc で戻る"
+		            "    ／ 帯の左半分・右半分をクリックしても増減できる"
 		            "    （変更はすぐ車に反映される）");
 		break;
 	case EPage::Graphics:

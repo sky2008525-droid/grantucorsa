@@ -10,6 +10,7 @@
 #include "Misc/Paths.h"
 #include "Engine/GameViewportClient.h"
 #include "Physics/ZN6Units.h"
+#include "Framework/Application/SlateApplication.h"
 #include "GameFramework/PlayerController.h"
 #include "UI/SZN6Hud.h"
 #include "UI/SZN6Menu.h"
@@ -252,11 +253,14 @@ void AZN6VehicleActor::CreateHud()
 		SNew(SWeakWidget).PossiblyNullContent(Menu.ToSharedRef()), /*ZOrder=*/20);
 
 	// **最初はメニューから始める。** いきなり走り出さない。
+	//
+	// ここでは入力モードを触らない。BeginPlay の時点では
+	// PlayerController がまだこの Pawn を所有していないことがあり、
+	// GetController() が null を返す。**その場合フォーカスが渡らず、
+	// メニューが操作できないまま起動する。**
+	// 最初の Tick で追いつかせる（bInputModeDirty）。
 	Menu->Open(SZN6Menu::EPage::Main);
-	if (APlayerController* PlayerPC = Cast<APlayerController>(GetController()))
-	{
-		PlayerPC->SetShowMouseCursor(true);
-	}
+	bInputModeDirty = true;
 }
 
 void AZN6VehicleActor::DestroyHud()
@@ -302,6 +306,45 @@ void AZN6VehicleActor::ApplySetup(const ZN6::FCarSetup& InSetup)
 	SettleRide();
 }
 
+void AZN6VehicleActor::SyncInputModeToMenu()
+{
+	// **これが無いとメニューが一切操作できない。**
+	//
+	// -game で走らせると PlayerController が入力を全部持っていく。
+	// ビューポートに足しただけの Slate ウィジェットにはキーが届かない。
+	// AddViewportWidgetContent は「描く」だけで、入力の経路は作らない。
+	//
+	// UI に渡すには入力モードを切り替え、**フォーカスするウィジェットを
+	// 明示する**必要がある。SetKeyboardFocus だけでは足りない
+	// （次のフレームでビューポートが取り返す）。
+	APlayerController* PlayerPC = Cast<APlayerController>(GetController());
+	if (PlayerPC == nullptr || !Menu.IsValid())
+	{
+		return;
+	}
+
+	if (Menu->IsOpen())
+	{
+		FInputModeUIOnly Mode;
+		Mode.SetWidgetToFocus(Menu);
+		// カーソルを閉じ込めない。**閉じ込めると窓から出られなくなる。**
+		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		PlayerPC->SetInputMode(Mode);
+		PlayerPC->SetShowMouseCursor(true);
+
+		// 念のためこちらでも focus を渡す（モードだけだと取りこぼす環境がある）
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().SetKeyboardFocus(Menu, EFocusCause::SetDirectly);
+		}
+	}
+	else
+	{
+		PlayerPC->SetInputMode(FInputModeGameOnly());
+		PlayerPC->SetShowMouseCursor(false);
+	}
+}
+
 void AZN6VehicleActor::ToggleMenu()
 {
 	if (!Menu.IsValid())
@@ -324,12 +367,7 @@ void AZN6VehicleActor::ToggleMenu()
 			? SZN6Menu::EPage::Result : SZN6Menu::EPage::Main);
 	}
 
-	// **マウスカーソルと入力モードを合わせる。**
-	// メニューが開いているのに車が操作できると、画面の裏で走り出す。
-	if (APlayerController* PlayerPC = Cast<APlayerController>(GetController()))
-	{
-		PlayerPC->SetShowMouseCursor(Menu->IsOpen());
-	}
+	SyncInputModeToMenu();
 }
 
 ZN6::FHudSnapshot AZN6VehicleActor::MakeHudSnapshot() const
@@ -945,6 +983,23 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 		                   SimulatedTimeS);
 	}
 
+	// **入力モードをメニューの状態に追従させる。**
+	// BeginPlay では PlayerController がまだ居ないことがあるので、
+	// ここで確実に合わせる。合っていれば何もしない。
+	if (Menu.IsValid())
+	{
+		const bool bMenuOpen = Menu->IsOpen();
+		if (bInputModeDirty || bMenuOpen != bInputModeAppliedForOpen)
+		{
+			SyncInputModeToMenu();
+			if (Cast<APlayerController>(GetController()) != nullptr)
+			{
+				bInputModeDirty = false;
+				bInputModeAppliedForOpen = bMenuOpen;
+			}
+		}
+	}
+
 	// **画面は物理の後。** 表示のために物理を先読みしない。
 	if (Hud.IsValid())
 	{
@@ -959,10 +1014,7 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 		Menu->SetSetup(Setup);
 		Menu->SetSnapshot(MakeHudSnapshot());
 		Menu->Open(SZN6Menu::EPage::Result);
-		if (APlayerController* PlayerPC = Cast<APlayerController>(GetController()))
-		{
-			PlayerPC->SetShowMouseCursor(true);
-		}
+		SyncInputModeToMenu();
 	}
 
 	if (bShowTelemetry)
