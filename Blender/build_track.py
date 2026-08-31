@@ -222,8 +222,12 @@ def build_ground(points, width_m, shoulder_m):
 
     bm.verts.ensure_lookup_table()
 
-    # 地面のテクスチャは 10 m で1回繰り返す
-    ground_uv_scale = 1.0 / 10.0
+    # 地面のテクスチャの繰り返し間隔 [m]。
+    #
+    # **10 m にすると格子模様として見える。** 地面は 1,374 x 950 m あり、
+    # 10 m 周期だと 137 回繰り返す。俯瞰したときに市松模様になった。
+    # 周期を伸ばすと近くでぼやけるが、繰り返しが目立つほうが不自然。
+    ground_uv_scale = 1.0 / 26.0
     for iy in range(ny - 1):
         for ix in range(nx - 1):
             verts = (grid[iy][ix], grid[iy][ix + 1],
@@ -245,7 +249,7 @@ def build_ground(points, width_m, shoulder_m):
     return obj, (x0, x1, y0, y1)
 
 
-def plan_trees(points, width_m, offsets, species):
+def plan_trees(points, width_m, offsets, species_list):
     """中心線に沿って樹木の配置を決める。
 
     **路面から離す。** 物理に衝突判定が無いため、木に突っ込むと
@@ -266,6 +270,7 @@ def plan_trees(points, width_m, offsets, species):
         ny = math.cos(heading)
 
         for side in (+1.0, -1.0):
+            species = rng.choice(species_list)
             offset = rng.uniform(min_offset, max_offset)
             jitter = rng.uniform(-TREE_SPACING_M * 0.4, TREE_SPACING_M * 0.4)
             x = p["x_m"] + nx * offset * side + math.cos(heading) * jitter
@@ -278,12 +283,16 @@ def plan_trees(points, width_m, offsets, species):
                 continue
 
             placements.append({
-                "species": rng.choice(species),
+                "species": species,
                 "x_m": x,
                 "y_m": y,
                 "z_m": 0.0,
                 "yaw_rad": rng.uniform(0.0, 2.0 * math.pi),
-                "scale": rng.uniform(0.8, 1.35),
+                # **PolyHaven の樹木は sapling（若木）で 1〜3 m しかない。**
+                # 等倍だと並木ではなく下草に見える。切株以外は拡大する。
+                # 実寸から離れるが、**これは景観であって計測対象ではない。**
+                "scale": (rng.uniform(0.8, 1.4) if species == "tree_stump_01"
+                          else rng.uniform(1.9, 3.4)),
             })
     return placements
 
