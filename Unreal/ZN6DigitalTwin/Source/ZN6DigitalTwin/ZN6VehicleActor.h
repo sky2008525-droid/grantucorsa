@@ -20,6 +20,7 @@
 #include "Game/ZN6RaceDirector.h"
 #include "UI/ZN6HudSnapshot.h"
 #include "UI/ZN6Livery.h"
+#include "Visual/ZN6TyreMarkComponent.h"
 #include "Physics/ZN6Obstacles.h"
 #include "Physics/ZN6Ride.h"
 #include "Physics/ZN6Track.h"
@@ -595,6 +596,13 @@ private:
 
 	/** セッションの進行役。**物理には触らない。** */
 	ZN6::FRaceDirector Race;
+
+	/**
+	 * タイヤ痕。**絵であって物理ではない**（ルール18）。
+	 * 痕を残してもグリップは変わらない。
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<UZN6TyreMarkComponent> TyreMarks;
 
 	/** 走行中の画面。**入力は奪わない**（HitTestInvisible）。 */
 	TSharedPtr<class SZN6Hud> Hud;

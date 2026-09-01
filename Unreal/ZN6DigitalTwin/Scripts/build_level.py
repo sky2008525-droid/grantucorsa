@@ -95,6 +95,69 @@ def find_asset(folder, name_contains, cls):
     return None
 
 
+def make_tyre_mark_material(name="M_ZN6_TyreMark"):
+    """タイヤ痕のデカール用マテリアル。
+
+    **ディファードデカールにする。** 通常のマテリアルを板に貼ると、
+    路面の起伏や継ぎ目で浮いて見える。デカールなら路面へ投影される。
+
+    濃さは `Opacity` パラメータで外から変える。滑りが強いほど濃く、
+    時間とともに薄くする（`UZN6TyreMarkComponent`）。
+    """
+    package = PKG_MATERIAL
+    unreal.EditorAssetLibrary.make_directory(package)
+
+    asset_path = "%s/%s" % (package, name)
+    if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+        unreal.EditorAssetLibrary.delete_asset(asset_path)
+
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    material = tools.create_asset(name, package, unreal.Material,
+                                  unreal.MaterialFactoryNew())
+    if material is None:
+        unreal.log_error("[ZN6 level] マテリアルを作れない: %s" % asset_path)
+        return None
+
+    # **デカールにする。** これを忘れると板がそのまま宙に浮く。
+    material.set_editor_property("material_domain",
+                                 unreal.MaterialDomain.MD_DEFERRED_DECAL)
+    # **decal_blend_mode は使えない。** UE 5.8 では protected になっており
+    # set_editor_property が例外を投げる（実際に build_level が途中で止まった）。
+    # デカールも通常の blend_mode を使う形に変わっている。
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+
+    lib = unreal.MaterialEditingLibrary
+
+    # 色。**真っ黒にしない。** 実際のタイヤ痕は路面より少し暗いだけで、
+    # 真っ黒だと穴が開いたように見える。
+    colour = lib.create_material_expression(
+        material, unreal.MaterialExpressionVectorParameter, -600, -200)
+    colour.set_editor_property("parameter_name", "MarkColour")
+    colour.set_editor_property("default_value",
+                               unreal.LinearColor(0.035, 0.033, 0.032, 1.0))
+    lib.connect_material_property(colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    # 濃さ。外から毎フレーム変える。
+    opacity = lib.create_material_expression(
+        material, unreal.MaterialExpressionScalarParameter, -600, 100)
+    opacity.set_editor_property("parameter_name", "Opacity")
+    opacity.set_editor_property("default_value", 0.75)
+    lib.connect_material_property(opacity, "", unreal.MaterialProperty.MP_OPACITY)
+
+    # ゴムは路面より艶がある
+    rough = lib.create_material_expression(
+        material, unreal.MaterialExpressionScalarParameter, -600, 300)
+    rough.set_editor_property("parameter_name", "Roughness")
+    rough.set_editor_property("default_value", 0.62)
+    lib.connect_material_property(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+
+    lib.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(material.get_path_name(),
+                                         only_if_is_dirty=False)
+    log("タイヤ痕のマテリアル: %s" % name)
+    return material
+
+
 def make_road_material(name, diffuse, normal, rough,
                        overlay_diff, overlay_mask, overlay_rough):
     """アスファルトの上に白線・ひび割れ・補修跡を重ねたマテリアル。
@@ -277,6 +340,8 @@ def build_track_materials():
         texture("aerial_grass_rock_nor_gl"),
         texture("aerial_grass_rock_rough"),
         uv_scale=1.0)
+    make_tyre_mark_material()
+
     log("マテリアル: road=%s ground=%s"
         % (road.get_name() if road else "None", ground.get_name() if ground else "None"))
     return road, ground

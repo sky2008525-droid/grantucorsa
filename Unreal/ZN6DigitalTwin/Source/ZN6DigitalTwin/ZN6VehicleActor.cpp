@@ -88,6 +88,10 @@ AZN6VehicleActor::AZN6VehicleActor()
 	}
 
 	// --- 追従カメラ。**描画専用。** ---------------------------------------
+	// タイヤ痕。**絵であって物理ではない。**
+	TyreMarks = CreateDefaultSubobject<UZN6TyreMarkComponent>(TEXT("TyreMarks"));
+	TyreMarks->SetupAttachment(Root);
+
 	// **音は最後。** 物理にも描画にも関わらない（憲法ルール18）。
 	Audio = CreateDefaultSubobject<UZN6VehicleAudioComponent>(TEXT("VehicleAudio"));
 	Audio->SetupAttachment(Root);
@@ -155,6 +159,13 @@ void AZN6VehicleActor::BeginPlay()
 		UE_LOG(LogTemp, Warning,
 		       TEXT("ZN6: コース定義を読めない: %s。計測とミニマップが働かない。"),
 		       *Error);
+	}
+
+	// タイヤ痕。**出なくても走りは変わらない。**
+	if (TyreMarks != nullptr && !TyreMarks->Initialise(Error))
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: タイヤ痕を用意できない: %s。痕なしで走る。"), *Error);
 	}
 
 	// 音。**鳴らなくても走りは変わらない。**
@@ -720,6 +731,11 @@ void AZN6VehicleActor::ReturnToMenu()
 {
 	Race.Reset();
 	ResetToStart();
+	// **痕も消す。** 残したまま位置を戻すと、走っていない場所に痕が残る。
+	if (TyreMarks != nullptr)
+	{
+		TyreMarks->ClearMarks();
+	}
 }
 
 bool AZN6VehicleActor::InitialiseAudio(const FString& RepoRoot, FString& OutError)
@@ -1215,7 +1231,10 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 		//
 		// 速度を抑える。速いとコーナーで曲がりきれず、撮れる画面が
 		// 毎回「草の上で回っている車」になる（実際そうなった）。
-		constexpr double TargetKmh = 55.0;
+		// 速度は上書きできる。**滑らせた画面を撮りたいときに使う**
+		// （タイヤ痕は滑らないと出ない）。
+		float TargetKmh = 55.0f;
+		FParse::Value(FCommandLine::Get(), TEXT("ZN6DriveKmh="), TargetKmh);
 		const double SpeedKmh = PhysicsState.SpeedMps() * ZN6::KmhPerMps;
 		RawThrottle = (SpeedKmh < TargetKmh) ? 0.55f : 0.0f;
 		RawBrake = (SpeedKmh > TargetKmh * 1.25) ? 0.35f : 0.0f;
@@ -1292,6 +1311,41 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 				bInputModeAppliedForOpen = bMenuOpen;
 			}
 		}
+	}
+
+	// --- タイヤ痕 ---
+	//
+	// **物理の後。** 滑りと接地の判定を物理から取る。
+	// 「アクセルを踏んだら出す」ようにはしない（物理と関係ない飾りになる）。
+	if (TyreMarks != nullptr && TyreMarks->IsReady())
+	{
+		constexpr double MetresToCentimetres = 100.0;
+		const double CosH = FMath::Cos(PhysicsState.HeadingRad);
+		const double SinH = FMath::Sin(PhysicsState.HeadingRad);
+
+		FVector ContactCm[ZN6::WheelCount];
+		double Used[ZN6::WheelCount];
+		bool bTouching[ZN6::WheelCount];
+
+		for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+		{
+			const FVector& Attach = WheelAttachM[Wheel];
+			const double WorldX = PhysicsState.XM + Attach.X * CosH - Attach.Y * SinH;
+			const double WorldY = PhysicsState.YM + Attach.X * SinH + Attach.Y * CosH;
+
+			// **痕は接地点に残る。** 車輪の中心ではない。
+			// 物理の y は左が正、UE は右が正なので符号を反転する。
+			ContactCm[Wheel] = FVector(
+				WorldX * MetresToCentimetres,
+				-WorldY * MetresToCentimetres,
+				WheelGroundM[Wheel] * MetresToCentimetres);
+
+			Used[Wheel] = PhysicsOutputs.Utilisation[Wheel];
+			bTouching[Wheel] = IsUsingRideModel() ? RideOutputs.bContact[Wheel] : true;
+		}
+
+		TyreMarks->Update(DeltaSeconds, ContactCm, Used, bTouching,
+		                  PhysicsState.HeadingRad);
 	}
 
 	// **画面は物理の後。** 表示のために物理を先読みしない。
