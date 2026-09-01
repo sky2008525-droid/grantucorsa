@@ -147,7 +147,8 @@ int32 SZN6Hud::PaintTachometer(const FGeometry& Geometry, FSlateWindowElementLis
 		{
 			continue;
 		}
-		const FVector2f At2 = OnArc(Centre, Radius * 0.66f, At);
+		// **中央の文字から離す。** 0.66 では速度の数字と重なっていた。
+		const FVector2f At2 = OnArc(Centre, Radius * 0.80f, At);
 		Text(Out, Layer + 1, Geometry, FString::FromInt(K),
 		     FVector2f(At2.X - 5.0f, At2.Y - 8.0f), LabelFont(13),
 		     At >= 0.92f ? Danger() : TextSecondary());
@@ -165,20 +166,23 @@ int32 SZN6Hud::PaintSpeedAndGear(const FGeometry& Geometry, FSlateWindowElementL
 	else if (Snapshot.Gear == 0) { GearText = TEXT("N"); }
 	else                         { GearText = FString::FromInt(Snapshot.Gear); }
 
+	// **ギアと速度を縦に離す。** 重ねると読めない（実際に重なっていた）。
 	const bool bNearRedline = Snapshot.EngineRpm >= Snapshot.RedlineRpm * 0.95;
+	const float GearWidth = ApproxTextWidth(GearText, 62);
 	Text(Out, Layer, Geometry, GearText,
-	     FVector2f(Centre.X - 22.0f, Centre.Y - 60.0f), NumeralFont(76),
+	     FVector2f(Centre.X - GearWidth * 0.5f, Centre.Y - 62.0f), NumeralFont(62),
 	     bNearRedline ? Danger() : TextPrimary());
 
-	// 速度。ギアの下に。
+	// 速度。ギアの下に、単位は右へ添える。
 	const FString SpeedText = FString::Printf(TEXT("%d"),
 		FMath::RoundToInt(static_cast<float>(Snapshot.SpeedKmh)));
-	const float SpeedWidth = ApproxTextWidth(SpeedText, 46);
+	const float SpeedWidth = ApproxTextWidth(SpeedText, 44);
 	Text(Out, Layer, Geometry, SpeedText,
-	     FVector2f(Centre.X - SpeedWidth * 0.5f, Centre.Y + 28.0f),
-	     NumeralFont(46), TextPrimary());
+	     FVector2f(Centre.X - SpeedWidth * 0.5f - 12.0f, Centre.Y + 14.0f),
+	     NumeralFont(44), TextPrimary());
 	Text(Out, Layer, Geometry, TEXT("km/h"),
-	     FVector2f(Centre.X - 16.0f, Centre.Y + 78.0f), LabelFont(12), TextFaint());
+	     FVector2f(Centre.X + SpeedWidth * 0.5f - 6.0f, Centre.Y + 38.0f),
+	     LabelFont(12), TextSecondary());
 
 	return Layer + 1;
 }
@@ -394,8 +398,9 @@ int32 SZN6Hud::PaintMiniMap(const FGeometry& Geometry, FSlateWindowElementList& 
 	const FVector2f First = Points[0];
 	Points.Add(First);
 
+	// **薄すぎると何も見えない。** AccentDim では路面と同化していた。
 	FSlateDrawElement::MakeLines(Out, Next, Geometry.ToPaintGeometry(), Points,
-	                             ESlateDrawEffect::None, AccentDim(), true, 2.0f);
+	                             ESlateDrawEffect::None, Accent(), true, 2.5f);
 
 	// 自車。**向きも出す。** 点だけだとどちらを向いているか分からない。
 	const FVector2f Car = ToScreen(FVector2D(Snapshot.CarXM, Snapshot.CarYM));
@@ -403,10 +408,11 @@ int32 SZN6Hud::PaintMiniMap(const FGeometry& Geometry, FSlateWindowElementList& 
 	const FVector2f Nose(Car.X + FMath::Cos(HeadingRad) * 9.0f,
 	                     Car.Y - FMath::Sin(HeadingRad) * 9.0f);
 
-	const FLinearColor CarColour = Snapshot.bOffTrack ? Warn() : Accent();
+	// **自車は白で大きく。** コースの線と同じ色だと、どちらが車か分からない。
+	const FLinearColor CarColour = Snapshot.bOffTrack ? Warn() : TextPrimary();
 	Line(Out, Next + 1, Geometry, Car, Nose, CarColour, 3.0f);
 	Box(Out, Next + 1, Geometry, WhiteBrush,
-	    FVector2f(Car.X - 3.0f, Car.Y - 3.0f), FVector2f(6.0f, 6.0f), CarColour);
+	    FVector2f(Car.X - 4.0f, Car.Y - 4.0f), FVector2f(8.0f, 8.0f), CarColour);
 
 	// スタート/ゴール線
 	const FVector2f Start = ToScreen(CentrelineM[0]);
@@ -504,8 +510,14 @@ int32 SZN6Hud::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry
 	}
 
 	// --- 左下: 回転計・ギア・速度 ---
+	//
+	// **背景パネルを必ず敷く。** 敷かずに線と文字だけ描いていたら、
+	// 昼の明るい路面と空で計器が完全に埋もれていた。撮って初めて見えた。
 	const float Radius = 118.0f;
 	const FVector2f DialCentre(PadL() + Radius + 18.0f, Screen.Y - Radius - 56.0f);
+	Layer = PaintPanel(AllottedGeometry, OutDrawElements, Layer,
+	                   FVector2f(PadL() * 0.5f, DialCentre.Y - Radius - PadM()),
+	                   FVector2f(Radius * 2.0f + 128.0f, Radius + 190.0f), 1.15f);
 	Layer = PaintTachometer(AllottedGeometry, OutDrawElements, Layer, DialCentre, Radius);
 	Layer = PaintSpeedAndGear(AllottedGeometry, OutDrawElements, Layer, DialCentre, Radius);
 
@@ -514,6 +526,9 @@ int32 SZN6Hud::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry
 	                    FVector2f(DialCentre.X + Radius + 26.0f, Screen.Y - 168.0f));
 
 	// --- 右下: 4輪のグリップ ---
+	Layer = PaintPanel(AllottedGeometry, OutDrawElements, Layer,
+	                   FVector2f(Screen.X - 240.0f, Screen.Y - 230.0f),
+	                   FVector2f(240.0f - PadL() * 0.5f, 230.0f - PadL() * 0.5f), 1.15f);
 	Layer = PaintGrip(AllottedGeometry, OutDrawElements, Layer,
 	                  FVector2f(Screen.X - 220.0f, Screen.Y - 210.0f));
 

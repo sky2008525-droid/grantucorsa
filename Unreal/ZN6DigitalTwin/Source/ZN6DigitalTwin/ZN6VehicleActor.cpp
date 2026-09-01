@@ -11,6 +11,9 @@
 #include "Engine/GameViewportClient.h"
 #include "Physics/ZN6Units.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "UnrealClient.h"
 #include "GameFramework/PlayerController.h"
 #include "UI/SZN6Hud.h"
 #include "UI/SZN6Menu.h"
@@ -304,6 +307,69 @@ void AZN6VehicleActor::ApplySetup(const ZN6::FCarSetup& InSetup)
 
 	// ばねが変われば釣り合う高さも変わる。**置き直す。**
 	SettleRide();
+}
+
+void AZN6VehicleActor::TickAutoScreenshot(float DeltaSeconds)
+{
+	if (bAutoShotTaken)
+	{
+		return;
+	}
+
+	if (AutoShotDelayS < 0.0f)
+	{
+		// 一度だけコマンドラインを見る。**指定が無ければ何もしない。**
+		float Seconds = 0.0f;
+		if (!FParse::Value(FCommandLine::Get(), TEXT("ZN6Shot="), Seconds))
+		{
+			bAutoShotTaken = true;      // 二度と見ない
+			return;
+		}
+		AutoShotDelayS = FMath::Max(Seconds, 0.1f);
+		UE_LOG(LogTemp, Display,
+		       TEXT("ZN6: %.1f 秒後に画面を撮って終了する"), AutoShotDelayS);
+	}
+
+	AutoShotElapsedS += DeltaSeconds;
+	if (AutoShotElapsedS < AutoShotDelayS)
+	{
+		return;
+	}
+	bAutoShotTaken = true;
+
+	APlayerController* PlayerPC = Cast<APlayerController>(GetController());
+	if (PlayerPC == nullptr)
+	{
+		// **撮れなかったことを黙って通さない**（憲法ルール6）。
+		UE_LOG(LogTemp, Error,
+		       TEXT("ZN6: PlayerController が無く画面を撮れない"));
+		return;
+	}
+
+	// **`Shot showui` を使う。**
+	//
+	// FScreenshotRequest::RequestScreenshot は要求を出すだけで、
+	// -game では拾われずファイルが出なかった（実際に空振りした）。
+	// コンソールコマンドは UGameViewportClient を通るので確実に書かれる。
+	// `showui` を付けないと **Slate の HUD とメニューが写らない**。
+	PlayerPC->ConsoleCommand(TEXT("Shot showui"));
+	UE_LOG(LogTemp, Display,
+	       TEXT("ZN6: 画面を撮った（Saved/Screenshots/ 以下）"));
+
+	// **書き終わるのを待ってから終了する。** 同じフレームで quit すると
+	// ファイルが出ない。
+	FTimerHandle Handle;
+	GetWorldTimerManager().SetTimer(Handle, [this]()
+	{
+		if (APlayerController* Controller = Cast<APlayerController>(GetController()))
+		{
+			Controller->ConsoleCommand(TEXT("quit"));
+		}
+		else
+		{
+			FPlatformMisc::RequestExit(false);
+		}
+	}, 2.0f, /*bLoop=*/false);
 }
 
 void AZN6VehicleActor::SyncInputModeToMenu()
@@ -964,6 +1030,38 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// **確認用の自動走行。** `-ZN6AutoDrive` を付けたときだけ。
+	//
+	// 走行中の HUD は走らせないと出ない（メニューでは描かない）。人が
+	// 操作せずに撮れるようにしておかないと、**HUD を誰も見ないまま完成と
+	// 呼ぶことになる。** 実際そうなっていた。
+	//
+	// **必ず ApplyDriverInput より前に書くこと。** 入力軸のコールバックは
+	// フレームの頭で毎回 RawThrottle を 0 に戻す。後ろに置くと、書いた値が
+	// 使われる前に上書きされて**車が1ミリも動かない**（実際そうなった）。
+	if (!bAutoDriveChecked)
+	{
+		bAutoDriveChecked = true;
+		bAutoDrive = FParse::Param(FCommandLine::Get(), TEXT("ZN6AutoDrive"));
+		if (bAutoDrive)
+		{
+			// **メニューを閉じる。** 開いたままだと HUD が覆われて見えない。
+			if (Menu.IsValid())
+			{
+				Menu->Close();
+			}
+			StartFreeRun();
+			SyncInputModeToMenu();
+			UE_LOG(LogTemp, Display, TEXT("ZN6: 自動走行で起動した（確認用）"));
+		}
+	}
+	if (bAutoDrive)
+	{
+		// 全開のままだと FR はすぐスピンする。**7割で流す。**
+		RawThrottle = 0.7f;
+		RawSteer = 0.0f;
+	}
+
 	// **入力 -> 物理 -> 描画 の順。** 逆にすると1フレーム遅れる。
 	ApplyDriverInput(DeltaSeconds);
 	AdvancePhysics(static_cast<double>(DeltaSeconds));
@@ -982,6 +1080,8 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 		                   PhysicsState.SpeedMps(), GetDistanceToTrackEdgeM(),
 		                   SimulatedTimeS);
 	}
+
+	TickAutoScreenshot(DeltaSeconds);
 
 	// **入力モードをメニューの状態に追従させる。**
 	// BeginPlay では PlayerController がまだ居ないことがあるので、
@@ -1123,6 +1223,16 @@ void AZN6VehicleActor::ApplyDriverInput(float DeltaSeconds)
 void AZN6VehicleActor::DrawTelemetry() const
 {
 	if (GEngine == nullptr || !bPhysicsReady)
+	{
+		return;
+	}
+
+	// **メニューが開いているあいだは出さない。**
+	//
+	// AddOnScreenDebugMessage は必ず左上に描かれ、メニューの1行目
+	// （RACE）に重なって読めなくしていた。実際に撮った画面で初めて
+	// 気づいた。**画面に出るものは見て確かめること。**
+	if (Menu.IsValid() && Menu->IsOpen())
 	{
 		return;
 	}

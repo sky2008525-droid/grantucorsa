@@ -401,7 +401,10 @@ protected:
 
 	/** 画面にテレメトリを出すか。 */
 	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
-	bool bShowTelemetry = true;
+	// **既定は off。** HUD が同じ情報を出すようになったので、重ねると
+	// ミニマップに被って読めなくなる（実際に撮った画面でそうなっていた）。
+	// 数値を生で見たいときだけ入れる。
+	bool bShowTelemetry = false;
 
 	/** 荷重移動の可視化。**車両仕様ではない**（憲法ルール18）。 */
 	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
@@ -529,6 +532,28 @@ private:
 	/** まだ入力モードを当てられていない（PlayerController が居なかった）。 */
 	bool bInputModeDirty = true;
 	bool bInputModeAppliedForOpen = false;
+
+	/**
+	 * 起動して一定時間後に画面を撮って終了する。
+	 *
+	 *     UnrealEditor.exe ... -game -ZN6Shot=8 -ZN6ShotName=menu
+	 *
+	 * **これが無いと、画面に出るものを誰も確認できない。**
+	 * SceneCapture2D（Scripts/screenshot_level.py）は 3D シーンしか撮れず、
+	 * **Slate で描いている HUD とメニューは1ピクセルも写らない。**
+	 * そのせいで「メニューが動かない」ことに気づけなかった。
+	 *
+	 * 撮ったら終了する。人が見ていない起動を残さないため。
+	 */
+	void TickAutoScreenshot(float DeltaSeconds);
+
+	/** `-ZN6AutoDrive`。**確認用の自動走行。** 人が居なくても HUD を撮れる。 */
+	bool bAutoDrive = false;
+	bool bAutoDriveChecked = false;
+
+	float AutoShotDelayS = -1.0f;
+	float AutoShotElapsedS = 0.0f;
+	bool bAutoShotTaken = false;
 
 	/** 今のセッティングと、その調整範囲。 */
 	ZN6::FCarSetup Setup;

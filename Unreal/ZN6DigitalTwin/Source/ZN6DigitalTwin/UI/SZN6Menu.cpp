@@ -391,16 +391,19 @@ int32 SZN6Menu::PaintChrome(const FGeometry& Geometry, FSlateWindowElementList& 
 	Box(Out, Layer, Geometry, WhiteBrush, FVector2f::ZeroVector, Screen, Overlay());
 
 	// 左上に大きく車名。**どのゲームか一目で分かる。**
+	//
+	// 副題の位置は**実際に撮った画面を見て決めた。** 64pt の文字は
+	// 指定した位置から下へ 64px ぶん占めるので、+70 では重なっていた。
+	const float TitleY = PadL() * 1.6f;
 	Text(Out, Layer + 1, Geometry, TEXT("ZN6"),
-	     FVector2f(PadL() * 2.0f, PadL() * 1.6f), NumeralFont(64), TextPrimary());
+	     FVector2f(PadL() * 2.0f, TitleY), NumeralFont(64), TextPrimary());
 	Text(Out, Layer + 1, Geometry, TEXT("TOYOTA 86  DIGITAL TWIN"),
-	     FVector2f(PadL() * 2.0f + 4.0f, PadL() * 1.6f + 70.0f),
-	     LabelFont(13), Accent());
+	     FVector2f(PadL() * 2.0f + 4.0f, TitleY + 84.0f), LabelFont(13), Accent());
 
 	// 差し色の細い縦線
 	Line(Out, Layer + 1, Geometry,
-	     FVector2f(PadL() * 2.0f - 12.0f, PadL() * 1.6f + 6.0f),
-	     FVector2f(PadL() * 2.0f - 12.0f, PadL() * 1.6f + 84.0f), Accent(), 3.0f);
+	     FVector2f(PadL() * 2.0f - 12.0f, TitleY + 6.0f),
+	     FVector2f(PadL() * 2.0f - 12.0f, TitleY + 98.0f), Accent(), 3.0f);
 
 	return Layer + 2;
 }
