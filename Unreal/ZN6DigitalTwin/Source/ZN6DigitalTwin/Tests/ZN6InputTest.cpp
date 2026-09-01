@@ -134,6 +134,13 @@ bool FZN6AbsoluteGearSelection::RunTest(const FString& Parameters)
 	TestEqual(TEXT("1速から R へ直接"), Actor->GetGearIndexForTest(), ZN6::GearReverse);
 
 	// **知らない段は黙って受け取らない。** 直前の段のまま。
+	//
+	// このとき警告が出るのは**そういう設計**なので、期待するものとして
+	// 登録しておく。登録しないと「警告つき成功」になり、**本物の警告が
+	// 出たときに見分けが付かなくなる。**
+	AddExpectedMessage(TEXT("選べない段が来た"), ELogVerbosity::Warning,
+	                   EAutomationExpectedMessageFlags::Contains, 2);
+
 	Actor->SelectGearForTest(6);
 	TestEqual(TEXT("7速は無い"), Actor->GetGearIndexForTest(), ZN6::GearReverse);
 	Actor->SelectGearForTest(-3);

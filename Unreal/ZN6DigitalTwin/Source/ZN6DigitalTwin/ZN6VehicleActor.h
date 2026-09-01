@@ -121,6 +121,25 @@ struct FZN6DriverAssists
 	float ShiftIntervalS = 0.45f;
 };
 
+/**
+ * 視点。**すべて描画専用で、物理には一切関与しない**（憲法ルール4）。
+ *
+ * 並びは「引き → 寄り」。C キーで順に回る。
+ */
+UENUM()
+enum class EZN6View : uint8
+{
+	/** 後方からの追従。既定。 */
+	Chase,
+	/** ボンネット上。 */
+	Bonnet,
+	/** 運転席。**車体と一緒に傾く。** */
+	Cockpit,
+	/** 前バンパー。速度感がいちばん出る。 */
+	Bumper,
+	Count UMETA(Hidden),
+};
+
 USTRUCT()
 struct FZN6DriverFeel
 {
@@ -461,6 +480,9 @@ public:
 	void GearAxisForTest(float Value) { InputGearAbsolute(Value); }
 	void SetClutchInputForTest(float Value) { RawClutch = Value; }
 	void SetAnalogInputForTest(bool bAnalog) { bAnalogInput = bAnalog; }
+	void CycleViewForTest() { CycleView(); }
+	EZN6View GetViewForTest() const { return View; }
+	void SetViewForTest(EZN6View InView) { View = InView; ApplyView(); }
 	bool IsAnalogInputForTest() const { return bAnalogInput; }
 	double GetSteerRadForTest() const { return Control.SteerRad; }
 	void SetSteerInputForTest(float Value) { RawSteer = Value; }
@@ -512,6 +534,28 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
 	TObjectPtr<UCameraComponent> ChaseCamera;
 
+	/**
+	 * 運転席の視点。**車体メッシュに付ける。**
+	 *
+	 * 付ける先が要点である。車体メッシュは荷重移動で傾く（`AttitudeFeel`）
+	 * ので、そこに付ければ**カメラも一緒に傾く。** ルートに付けると、
+	 * モデルが計算しているロールとピッチが画面に一切出ない。
+	 *
+	 * **位置は演出値である**（憲法ルール18）。`vehicle.json` の
+	 * `dimensions` にアイポイントの項目が無く、公表もされていない
+	 * （`Docs/SPEC_GT7_GAP.md` §8.2）。**測った値のふりをしない。**
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<UCameraComponent> CockpitCamera;
+
+	/** ボンネット視点。**位置は演出値。** */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<UCameraComponent> BonnetCamera;
+
+	/** バンパー視点。**位置は演出値。** */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<UCameraComponent> BumperCamera;
+
 	/** 操作感の設定。**車両仕様ではない**（憲法ルール18）。 */
 	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
 	FZN6DriverFeel DriverFeel;
@@ -538,6 +582,22 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
 	bool bAnalogInput = false;
 
+	/**
+	 * 今の視点。
+	 *
+	 * **追従カメラでも車体の傾きを一部だけ反映する。**
+	 * まったく反映しないと、モデルが計算している荷重移動が画面に
+	 * 出ない（`Docs/SPEC_GT7_GAP.md` §9 の3位）。全部反映すると、
+	 * スピン時に world ごと回って何が起きているか分からなくなる。
+	 * **割合は演出値である。**
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Visual")
+	EZN6View View = EZN6View::Chase;
+
+	/** 追従カメラに車体の傾きをどれだけ乗せるか [-]。**演出値。** */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Visual")
+	float ChaseAttitudeBlend = 0.35f;
+
 	/** 画面にテレメトリを出すか。 */
 	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
 	// **既定は off。** HUD が同じ情報を出すようになったので、重ねると
@@ -558,6 +618,15 @@ private:
 	void InputHandbrake(float Value);
 	void ShiftUp();
 	void ShiftDown();
+
+	/** 視点を次へ回す。 */
+	void CycleView();
+
+	/** 今の視点だけを有効にする。 */
+	void ApplyView();
+
+	/** テレメトリ用の視点名。 */
+	FString ViewLabel() const;
 
 	/**
 	 * 段を**絶対値で**入れる。H パターンシフターの口。

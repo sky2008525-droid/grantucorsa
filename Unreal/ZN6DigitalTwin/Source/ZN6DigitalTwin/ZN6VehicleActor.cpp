@@ -122,6 +122,38 @@ AZN6VehicleActor::AZN6VehicleActor()
 	ChaseCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("ChaseCamera"));
 	ChaseCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 
+	// --- 車体に付ける視点 ---------------------------------------------------
+	//
+	// **付ける先が要点。** 車体メッシュは荷重移動で傾くので、そこへ付ければ
+	// カメラも一緒に傾く。ルートへ付けると、モデルが計算しているロールと
+	// ピッチが画面に一切出ない（`Docs/SPEC_GT7_GAP.md` §9 の3位）。
+	//
+	// **位置はすべて演出値である**（憲法ルール18）。`vehicle.json` の
+	// `dimensions` にアイポイントの項目が無く、公表もされていない。
+	// 車体メッシュの原点は接地面（車輪の取り付け z = 0.312 m = タイヤ半径）
+	// なので、Z はそのまま地上高になる。
+	auto MakeBodyCamera = [this](const TCHAR* Name, const FVector& OffsetCm,
+	                             float FovDeg) -> UCameraComponent*
+	{
+		UCameraComponent* Camera = CreateDefaultSubobject<UCameraComponent>(Name);
+		Camera->SetupAttachment(BodyMesh);
+		Camera->SetRelativeLocation(OffsetCm);
+		Camera->SetFieldOfView(FovDeg);
+		Camera->SetActive(false);
+		return Camera;
+	};
+
+	// 運転席。**右ハンドル**（日本仕様）なので Y は正（UE は右が正）。
+	// 目の高さ 1.05 m は、全高 1.285 m から屋根までの余裕を引いた見当。
+	CockpitCamera = MakeBodyCamera(TEXT("CockpitCamera"),
+	                               FVector(-35.0f, 37.0f, 105.0f), 78.0f);
+	// ボンネット上。フェンダーの見切りが入る高さ。
+	BonnetCamera = MakeBodyCamera(TEXT("BonnetCamera"),
+	                              FVector(90.0f, 0.0f, 102.0f), 88.0f);
+	// 前バンパー。**いちばん速度感が出る。** 地面すれすれ。
+	BumperCamera = MakeBodyCamera(TEXT("BumperCamera"),
+	                              FVector(195.0f, 0.0f, 45.0f), 96.0f);
+
 	// この Pawn は UE の移動コンポーネントを持たない。
 	// **位置は物理モデルだけが決める。**
 	bUseControllerRotationYaw = false;
@@ -319,6 +351,15 @@ void AZN6VehicleActor::CreateHud()
 		UE_LOG(LogTemp, Display,
 		       TEXT("[ZN6] アナログ入力: 平滑化と速度による舵角の絞りを切る"));
 	}
+
+	// **視点を起動時に指定できるようにする**（撮影のため）。
+	int32 StartView = 0;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ZN6View="), StartView))
+	{
+		View = static_cast<EZN6View>(
+			FMath::Clamp(StartView, 0, static_cast<int32>(EZN6View::Count) - 1));
+	}
+	ApplyView();
 
 	SetUpReplayFromCommandLine();
 
@@ -1253,6 +1294,19 @@ void AZN6VehicleActor::SyncVisualToPhysics()
 		BodyMesh->SetRelativeLocation(
 			Pivot - BodyTilt.RotateVector(Pivot) + FVector(0.0, 0.0, BodyRiseCm));
 		BodyMesh->SetRelativeRotation(BodyTilt);
+
+		// **追従カメラにも車体の傾きを一部だけ乗せる。**
+		//
+		// まったく乗せないと、モデルが計算している荷重移動が画面に出ない
+		// （`Docs/SPEC_GT7_GAP.md` §9 の3位）。全部乗せると、スピン時に
+		// world ごと回って何が起きているか分からなくなる。
+		// **割合は演出値**（憲法ルール18）。車体に付けた視点は
+		// 車体と一緒に傾くので、ここでは触らない。
+		if (CameraBoom != nullptr)
+		{
+			CameraBoom->SetRelativeRotation(FRotator(
+				PitchDeg * ChaseAttitudeBlend, 0.0, RollDeg * ChaseAttitudeBlend));
+		}
 	}
 
 	const double SteerDeg = -FMath::RadiansToDegrees(Control.SteerRad);
@@ -1553,6 +1607,9 @@ void AZN6VehicleActor::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	                                 this, &AZN6VehicleActor::SelectGearReverse);
 	PlayerInputComponent->BindAxis(TEXT("ZN6_GearAbsolute"),
 	                               this, &AZN6VehicleActor::InputGearAbsolute);
+
+	PlayerInputComponent->BindAction(TEXT("ZN6_CameraNext"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::CycleView);
 }
 
 void AZN6VehicleActor::InputThrottle(float Value) { RawThrottle = Value; }
@@ -1934,6 +1991,66 @@ void AZN6VehicleActor::UpdateGhostVisual()
 	GhostMesh->SetVisibility(true);
 }
 
+// ---------------------------------------------------------------------------
+// 視点
+// ---------------------------------------------------------------------------
+
+void AZN6VehicleActor::CycleView()
+{
+	const int32 Next =
+		(static_cast<int32>(View) + 1) % static_cast<int32>(EZN6View::Count);
+	View = static_cast<EZN6View>(Next);
+	ApplyView();
+}
+
+void AZN6VehicleActor::ApplyView()
+{
+	// **有効なカメラは常に1つだけ。** 2つ以上を有効にすると、
+	// APawn がどちらを選ぶかは並び順まかせになり、視点の切り替えが
+	// 効いたり効かなかったりする。
+	UCameraComponent* const Cameras[] = {
+		ChaseCamera, BonnetCamera, CockpitCamera, BumperCamera
+	};
+	static_assert(UE_ARRAY_COUNT(Cameras) == static_cast<int32>(EZN6View::Count),
+	              "EZN6View とカメラの並びを揃えること");
+
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Cameras); ++Index)
+	{
+		if (Cameras[Index] != nullptr)
+		{
+			Cameras[Index]->SetActive(Index == static_cast<int32>(View));
+		}
+	}
+
+	// **車体の中に入る視点では、自分の車体を描かない。**
+	//
+	// 持っているのは外から見た形だけで、**車内は作られていない。**
+	// そのまま描くと、内側から見た面が裏返しに抜けて、車の反対側の
+	// 部品だけが宙に浮いて見える。実際、バンパー視点では車体後端の
+	// 赤い部品が空に浮いていた（撮って気づいた）。
+	//
+	// ボンネット視点はボンネットの上なので描いたままにする。**そこは
+	// 見えていた方がいい**（車の幅と向きが分かる）。
+	if (BodyMesh != nullptr)
+	{
+		const bool bInside =
+			(View == EZN6View::Cockpit) || (View == EZN6View::Bumper);
+		BodyMesh->SetOwnerNoSee(bInside);
+	}
+}
+
+FString AZN6VehicleActor::ViewLabel() const
+{
+	switch (View)
+	{
+	case EZN6View::Chase:   return TEXT("追従");
+	case EZN6View::Bonnet:  return TEXT("ボンネット");
+	case EZN6View::Cockpit: return TEXT("運転席");
+	case EZN6View::Bumper:  return TEXT("バンパー");
+	default:                return TEXT("?");
+	}
+}
+
 FString AZN6VehicleActor::GearLabel() const
 {
 	if (Control.GearIndex == ZN6::GearReverse) { return TEXT("R"); }
@@ -2061,8 +2178,8 @@ void AZN6VehicleActor::DrawTelemetry() const
 
 	GEngine->AddOnScreenDebugMessage(
 		1, 0.0f, FColor::White,
-		FString::Printf(TEXT("%5.1f km/h   %5.0f rpm   %s%s"),
-		                SpeedKmh, Rpm, *GearLabel(),
+		FString::Printf(TEXT("%5.1f km/h   %5.0f rpm   %s   視点: %s%s"),
+		                SpeedKmh, Rpm, *GearLabel(), *ViewLabel(),
 		                bAnalogInput ? TEXT("   [アナログ]") : TEXT("")));
 	GEngine->AddOnScreenDebugMessage(
 		2, 0.0f, RearSlip > 0.20 ? FColor::Orange : FColor::Silver,

@@ -377,6 +377,14 @@ namespace ZN6
 
 	FString HashFileContents(const FString& Path)
 	{
+		// **空のパスで読みに行かない。** 行くと LogStreaming が
+		// 「Failed to read file ''」を毎回吐き、テストの警告に紛れて
+		// 本物の警告が見えなくなる。
+		if (Path.IsEmpty())
+		{
+			return FString();
+		}
+
 		TArray<uint8> Bytes;
 		if (!FFileHelper::LoadFileToArray(Bytes, *Path))
 		{
