@@ -24,14 +24,14 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
 
 from aero import Aerodynamics
 from brake import Brakes
 from clutch import Clutch
 from differential import OpenDifferential, TorsenDifferential
-from drivetrain import FORWARD_GEARS, Drivetrain
+from drivetrain import FORWARD_GEARS, NEUTRAL, SELECTABLE_GEARS, Drivetrain
 from engine import Engine
 from setup import CarSetup
 from tire import Tire
@@ -54,6 +54,12 @@ class ControlInput:
     brake: float = 0.0
     steer_rad: float = 0.0
     gear: str = "1"
+    """入れている段。`"1"`-`"6"` / `"N"`（ニュートラル）/ `"R"`（後退）。
+
+    **数値の添字ではなく文字列。** H パターンシフターは「今どの段に
+    入っているか」を絶対値で送ってくるので、段の名前をそのまま持つ。
+    ニュートラルと後退は「6速の外側」であって連番の端ではない。
+    """
     clutch: float = 1.0
     """0.0 = 完全に切る / 1.0 = 完全に繋ぐ。**bool ではない。**
 
@@ -61,6 +67,16 @@ class ControlInput:
     """
     handbrake: float = 0.0
     """サイドブレーキの引き量 0.0-1.0。**後輪のみ**に効く。"""
+
+    def __post_init__(self) -> None:
+        # **知らない段を黙って受け取らない**（憲法ルール6）。
+        # `"7"` や `0` を渡されたとき、ここで止めないと減速比の辞書引きで
+        # 落ちるか、もっと悪いと別の段として走ってしまう。
+        if self.gear not in SELECTABLE_GEARS:
+            raise ValueError(
+                "選べない段: {!r}。選べるのは {}".format(
+                    self.gear, "/".join(SELECTABLE_GEARS))
+            )
 
     @property
     def clutch_engaged(self) -> bool:
@@ -295,13 +311,38 @@ class Vehicle:
         rear_omega_mean = (
             state.wheel_omega_rads["RL"] + state.wheel_omega_rads["RR"]
         ) / 2.0
-        gearbox_omega = self.drivetrain.engine_omega_rads(rear_omega_mean, control.gear)
+
+        # **ニュートラルでは歯車が噛んでいない。**
+        #
+        # クラッチペダルをどこまで戻していても、変速機の中で入力軸と
+        # 出力軸が繋がっていないので車輪へトルクは行かない。クラッチを
+        # 切ったのと同じ扱いにする（`clutch=0`）と、
+        #
+        #   - クラッチ容量が 0 になり伝達トルクが 0
+        #   - `clutch_locked` が False になり、車輪慣性にエンジン慣性を
+        #     足す枝も自動的に外れる
+        #
+        # が同時に成り立つ。**「だいたい同じだから」ではなく、
+        # 動力の通り道が無いという同じ理由で同じ式になる。**
+        neutral = control.gear == NEUTRAL
+        if neutral:
+            # 変速機入力軸は空転する。相対回転差を作らないために
+            # エンジン回転をそのまま入れる（容量 0 なので結果には
+            # 効かないが、意味の無い値を渡さない）。
+            gearbox_omega = state.engine_omega_rads
+            engine_control = replace(control, clutch=0.0)
+        else:
+            gearbox_omega = self.drivetrain.engine_omega_rads(
+                rear_omega_mean, control.gear)
+            engine_control = control
 
         engine_omega, clutch_torque, engine_torque, clutch_locked = self._integrate_engine(
-            state.engine_omega_rads, gearbox_omega, control, dt_s
+            state.engine_omega_rads, gearbox_omega, engine_control, dt_s
         )
         engine_rpm = rads_to_rpm(engine_omega)
-        axle_torque = self.drivetrain.wheel_torque_nm(clutch_torque, control.gear)
+        axle_torque = (
+            0.0 if neutral
+            else self.drivetrain.wheel_torque_nm(clutch_torque, control.gear))
 
         torque_rl, torque_rr = self.differential.split_torque_nm(
             axle_torque, state.wheel_omega_rads["RL"], state.wheel_omega_rads["RR"]
@@ -338,7 +379,7 @@ class Vehicle:
             # 車輪軸へ換算して足す（1速では総比^2 = 約221倍になり支配的）。
             # 滑っている間はエンジンが切り離されているので足さない。
             inertia = self.wheel_inertia_kgm2
-            if wheel in REAR_WHEELS and clutch_locked:
+            if wheel in REAR_WHEELS and clutch_locked and not neutral:
                 inertia += self.drivetrain.reflected_inertia_at_wheel_kgm2(control.gear) / 2.0
 
             brake = math.copysign(brake_torque[wheel], omega) if abs(omega) > 0.1 else 0.0
@@ -429,8 +470,17 @@ class Vehicle:
         self._last_ax = ax_mps2
         self._last_ay = ay_mps2
 
+        # **前後速度を 0 で切り上げない。**
+        #
+        # 以前は `max(..., 0.0)` で負を潰していた。前進しか無かった間は
+        # 「止まっているのに後ろへずり下がる」のを防いでいたが、
+        # **後退に入れても車が動かない**という形で表に出た（加速度は
+        # 正しく負を向いているのに、速度が毎ステップ 0 に戻されていた）。
+        #
+        # 止まった車が勝手に下がらないことは、タイヤ力と制動トルクが
+        # 受け持つべきで、状態変数を切り上げて作る性質ではない。
         new_state = VehicleState(
-            vx_mps=max(state.vx_mps + vx_dot * dt_s, 0.0),
+            vx_mps=state.vx_mps + vx_dot * dt_s,
             vy_mps=state.vy_mps + vy_dot * dt_s,
             yaw_rate_rads=state.yaw_rate_rads + yaw_accel * dt_s,
             x_m=state.x_m + (state.vx_mps * math.cos(state.heading_rad)
@@ -479,11 +529,28 @@ class Vehicle:
 
         if locked:
             # 拘束。エンジンは変速機入力と一体で回る
+            #
+            # **変速機側がアイドルより遅いときは、アイドル制御が
+            # エンジンを支えている。** 実車の ECU は回転が落ちると
+            # 燃料を足して回転を保つ。
+            governed = gearbox_omega < self.idle_omega_rads
             engine_omega = max(gearbox_omega, self.idle_omega_rads)
             engine_torque = self.engine.torque_nm(engine_omega, control.throttle)
             # エンジンが出したトルクはそのままクラッチを通る。
             # 慣性による抵抗は、車輪側に反映した等価慣性が受け持つ。
             clutch_torque = engine_torque
+            if governed:
+                # **支えられているエンジンは駆動系を後ろへ引けない。**
+                #
+                # 回転をアイドルで切り上げているだけだった間は、停車中に
+                # 1速でクラッチを繋ぐと閉じスロットルの負トルクが残り、
+                # 車が後ろへ 0.3 m/s でずり下がった。前後速度を 0 で
+                # 切り上げていたので見えていなかっただけである。
+                #
+                # 実車ではこの状態は「アイドル制御が支える」か
+                # 「エンストする」のどちらかで、**後ろへ押す**ことはない。
+                # エンストは別途モデル化していないので、ここでは支える側を採る。
+                clutch_torque = max(clutch_torque, 0.0)
             if abs(clutch_torque) > capacity:
                 clutch_torque = math.copysign(capacity, clutch_torque)
             return engine_omega, clutch_torque, engine_torque, True

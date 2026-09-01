@@ -16,6 +16,25 @@ from vehicle_data import VehicleData
 
 FORWARD_GEARS = ["1", "2", "3", "4", "5", "6"]
 
+NEUTRAL = "N"
+"""ニュートラル。**減速比を持たない。**
+
+歯車が噛んでいないので、クラッチをどれだけ繋いでもエンジンと車輪の間に
+トルクの通り道が無い。`total_ratio` は値を返さず例外を投げる
+（0 を返すと「比が 0 の段」として計算が通ってしまい、間違いが黙って進む）。
+"""
+
+REVERSE = "R"
+"""後退。公表されている 3.437 は**比の大きさ**である。
+
+リバースアイドラが1枚入るぶん出力の回転方向が前進と逆になるので、
+符号は `total_ratio` で付ける。**vehicle.json の値は official なので
+負号を書き込まない**（憲法ルール1・2）。
+"""
+
+SELECTABLE_GEARS = FORWARD_GEARS + [NEUTRAL, REVERSE]
+"""運転者が選べる段。**H パターンシフターが送ってくるのはこの集合。**"""
+
 
 class Drivetrain:
     def __init__(self, data: VehicleData) -> None:
@@ -56,8 +75,22 @@ class Drivetrain:
     # --- 比 ---------------------------------------------------------------
 
     def total_ratio(self, gear: str) -> float:
-        """エンジン回転 / 車輪回転 の総減速比。"""
-        return self.gear_ratios[gear] * self.final_drive
+        """エンジン回転 / 車輪回転 の総減速比。
+
+        後退では**負**を返す。エンジンが正転していても車輪は逆へ回るため。
+        ニュートラルでは比が存在しないので例外を投げる（呼ぶ側が
+        「ニュートラルでは駆動系を通らない」と書き分けること）。
+        """
+        if gear == NEUTRAL:
+            raise ValueError(
+                "ニュートラルには減速比が無い。歯車が噛んでいないので"
+                "エンジンと車輪の間にトルクの通り道が存在しない。"
+                "呼ぶ側で分岐すること"
+            )
+        ratio = self.gear_ratios[gear] * self.final_drive
+        if gear == REVERSE:
+            return -ratio
+        return ratio
 
     def engine_omega_rads(self, wheel_omega_rads: float, gear: str) -> float:
         return wheel_omega_rads * self.total_ratio(gear)
