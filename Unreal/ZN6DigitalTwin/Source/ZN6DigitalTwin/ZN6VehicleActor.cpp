@@ -88,6 +88,17 @@ AZN6VehicleActor::AZN6VehicleActor()
 	}
 
 	// --- 追従カメラ。**描画専用。** ---------------------------------------
+	// ゴーストの車体。**描画専用で、当たり判定を持たない。**
+	//
+	// 親の変換から切り離す（SetAbsolute）。切り離さないと、ゴーストが
+	// 自車にくっついて動き、**常に自分の真横に並走する**という
+	// 意味の無い絵になる。
+	GhostMesh = MakeVisualMesh(TEXT("GhostMesh"));
+	GhostMesh->SetAbsolute(/*bNewAbsoluteLocation=*/true,
+	                       /*bNewAbsoluteRotation=*/true,
+	                       /*bNewAbsoluteScale=*/true);
+	GhostMesh->SetVisibility(false);
+
 	// タイヤ痕。**絵であって物理ではない。**
 	TyreMarks = CreateDefaultSubobject<UZN6TyreMarkComponent>(TEXT("TyreMarks"));
 	TyreMarks->SetupAttachment(Root);
@@ -133,7 +144,8 @@ void AZN6VehicleActor::BeginPlay()
 		FPaths::ProjectDir() / TEXT("../.."));
 
 	FString Error;
-	if (!InitialisePhysics(RepoRoot / TEXT("Vehicles/ZN6/vehicle.json"), Error))
+	LoadedVehiclePath = RepoRoot / TEXT("Vehicles/ZN6/vehicle.json");
+	if (!InitialisePhysics(LoadedVehiclePath, Error))
 	{
 		// **握りつぶさない。** 値が無いならこのモデルは動かせない、が正しい状態。
 		UE_LOG(LogTemp, Error, TEXT("ZN6: 物理モデルを初期化できない: %s"), *Error);
@@ -162,6 +174,7 @@ void AZN6VehicleActor::BeginPlay()
 	{
 		TrackKey = TEXT("physics_test_track");
 	}
+	LoadedTrackKey = TrackKey;
 	const FString TrackDir = RepoRoot / TEXT("Tracks/Export") / TrackKey;
 	UE_LOG(LogTemp, Display, TEXT("ZN6: コース = %s"), *TrackKey);
 
@@ -306,6 +319,8 @@ void AZN6VehicleActor::CreateHud()
 		UE_LOG(LogTemp, Display,
 		       TEXT("[ZN6] アナログ入力: 平滑化と速度による舵角の絞りを切る"));
 	}
+
+	SetUpReplayFromCommandLine();
 
 	// **段を指定して起動できるようにする。** N と R が画面にどう出るかを
 	// 人手なしで撮るための口（`-ZN6Gear=N` / `-ZN6Gear=R` / `-ZN6Gear=3`）。
@@ -763,6 +778,21 @@ void AZN6VehicleActor::ResetToStart()
 	VisualRollRad = VisualRollRateRads = 0.0;
 	VisualPitchRad = VisualPitchRateRads = 0.0;
 	Accumulator.AccumulatedS = 0.0;
+
+	// **接地モデルの状態も戻す。**
+	//
+	// 戻していなかった間は、位置と速度だけを初期値にして、ばねの縮みと
+	// 前ステップの接地力は前の走行のものが残っていた。人が R を押した
+	// ときは「少し沈んだ状態から始まる」程度で気づかないが、**同じ操作を
+	// 流し直しても同じ道を通らない**という形で表に出る（リプレイ）。
+	bHasPreviousContactLoads = false;
+	for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+	{
+		PreviousContactLoadsN[Wheel] = 0.0;
+	}
+	RideState = ZN6::FRideState();
+	SettleRide();
+
 	SyncVisualToPhysics();
 }
 
@@ -1002,6 +1032,40 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 
 	for (int32 Step = 0; Step < Steps; ++Step)
 	{
+		// **再生中は操作を記録から差し戻す。**
+		//
+		// **フレーム単位ではなくステップ単位で差し戻すのが要点。**
+		// フレームは描画の都合で長さが変わるので、フレーム単位で
+		// 入れ替えると再生の fps が録画時と違うだけで結果が変わる。
+		if (Player.IsActive())
+		{
+			ZN6::FControlInput Replayed;
+			if (Player.Next(Replayed))
+			{
+				Control = Replayed;
+			}
+			else
+			{
+				// **記録が尽きたら、そのフレームの残りも進めない。**
+				//
+				// 止めるだけで進め続けると、フレームの残り（30 fps なら
+				// 最大 32 ステップ）が「操作 0」で走る。再生の終わりが
+				// フレームレートによって変わってしまい、**同じ記録を
+				// 流したのに終点が違う**ことになる。
+				StopPlayback();
+				break;
+			}
+		}
+
+		// **記録は Step の前。** ここで渡す操作が、この1ステップの入力。
+		if (Recorder.IsActive())
+		{
+			Recorder.Record(Control, SimulatedTimeS,
+			                PhysicsState.XM, PhysicsState.YM, GroundHeightM,
+			                PhysicsState.HeadingRad, VisualPitchRad, VisualRollRad,
+			                PhysicsState.SpeedMps());
+		}
+
 		// **地面を先に調べる。** 車の位置が変わるたびに斜面も変わる。
 		SampleGround();
 
@@ -1052,6 +1116,15 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 		// 描画が重い日でもラップタイムが変わらない。
 		Race.Advance(FixedStep, PhysicsState.XM, PhysicsState.YM,
 		             PhysicsState.SpeedMps());
+
+		// **周が変わった瞬間に記録を締める。**
+		// フレームの終わりまで待つと、次の周の最初の数ステップが
+		// 前の周の記録に混ざる。
+		if (Race.LapsDone() != LastSeenLapCount)
+		{
+			LastSeenLapCount = Race.LapsDone();
+			OnLapCompleted();
+		}
 
 		SimulatedTimeS += FixedStep;
 		++TotalStepCount;
@@ -1336,6 +1409,9 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 	AdvancePhysics(static_cast<double>(DeltaSeconds));
 	SyncVisualToPhysics();
 
+	// **ゴーストは描画だけ。** 物理には一切戻さない（憲法ルール4）。
+	UpdateGhostVisual();
+
 	// **音は物理の後。** 固定刻みの中ではなくフレームごとに更新する
 	// （音は聞こえるものであって、積分するものではない）。
 	if (Audio != nullptr && Audio->IsReady())
@@ -1588,6 +1664,274 @@ void AZN6VehicleActor::InputGearAbsolute(float Value)
 	{
 		SetGearAbsolute(FMath::Clamp(Rounded - 1, 0, ZN6::ForwardGearCount - 1));
 	}
+}
+
+// ---------------------------------------------------------------------------
+// リプレイとゴースト
+// ---------------------------------------------------------------------------
+
+ZN6::FReplayHeader AZN6VehicleActor::MakeReplayHeader() const
+{
+	ZN6::FReplayHeader Header;
+	Header.TrackKey = LoadedTrackKey;
+	Header.VehicleHash = ZN6::HashFileContents(LoadedVehiclePath);
+	// **セッティングは Describe() の文字列から作る。** 専用の直列化を
+	// 別に持つと、項目を足したときに片方だけ更新されて「違うのに
+	// 同じ」と判定される。人が読む要約と同じものを使えば必ず揃う。
+	Header.SetupHash = FMD5::HashAnsiString(*Setup.Describe());
+	Header.FixedStepS = Accumulator.FixedStepS;
+	Header.GhostStride = ZN6::DefaultGhostStride;
+	return Header;
+}
+
+void AZN6VehicleActor::StartRecording()
+{
+	Recorder.Begin(MakeReplayHeader());
+}
+
+bool AZN6VehicleActor::StartPlayback(const ZN6::FReplay& InReplay, FString& OutError)
+{
+	if (InReplay.StepCount() == 0)
+	{
+		OutError = TEXT("空の記録は再生できない");
+		return false;
+	}
+
+	// **条件が違えば再生しない**（憲法ルール6）。
+	// 別の車・別のコース・別のセッティングの記録を再生して出てくる軌跡は、
+	// 「同じ操作をしたときの姿」ではない。それを気づかずに比較へ使うのが、
+	// いちばん静かな形の捏造である。
+	FString Reason;
+	if (!InReplay.MatchesConditions(MakeReplayHeader(), Reason))
+	{
+		OutError = FString::Printf(TEXT("条件が違う: %s"), *Reason);
+		return false;
+	}
+
+	// **記録の初期状態へ戻す。** 途中から流すと、同じ操作でも違う道を通る。
+	ResetToStart();
+	Player.Begin(InReplay);
+	StartFreeRun();
+	return true;
+}
+
+void AZN6VehicleActor::StopPlayback()
+{
+	Player.Stop();
+	// **踏みっぱなしで放り出さない。** 再生が終わった瞬間に人へ
+	// 操作を返すと、記録の最後の全開が残ったままになる。
+	Control.Throttle = 0.0;
+	Control.Brake = 0.0;
+	Control.Handbrake = 0.0;
+	RawThrottle = 0.0f;
+	RawBrake = 0.0f;
+	RawSteer = 0.0f;
+}
+
+void AZN6VehicleActor::SetGhost(const ZN6::FReplay& InGhost)
+{
+	GhostReplay = InGhost;
+	if (GhostMesh != nullptr)
+	{
+		GhostMesh->SetVisibility(GhostReplay.Ghost.Num() > 0);
+	}
+}
+
+void AZN6VehicleActor::ClearGhost()
+{
+	GhostReplay.Reset();
+	if (GhostMesh != nullptr)
+	{
+		GhostMesh->SetVisibility(false);
+	}
+}
+
+void AZN6VehicleActor::PrepareGhostMesh()
+{
+	if (GhostMesh == nullptr || BodyMesh == nullptr)
+	{
+		return;
+	}
+
+	// **自車の車体と同じメッシュを使う。**
+	//
+	// レベル側（`build_level.py`）で割り当てるのではなく実行時に写す。
+	// レベル側でやると、コースを作り直すまでゴーストが出ない。
+	GhostMesh->SetStaticMesh(BodyMesh->GetStaticMesh());
+
+	UMaterialInterface* GhostMaterial = LoadObject<UMaterialInterface>(
+		nullptr, TEXT("/Game/ZN6/Materials/M_ZN6_Ghost.M_ZN6_Ghost"));
+	if (GhostMaterial == nullptr)
+	{
+		// **黙って自車と同じ見た目にしない**（憲法ルール6）。
+		// 同じ色で並走されると、どちらが自分か分からなくなる。
+		UE_LOG(LogTemp, Warning,
+		       TEXT("[ZN6] ゴーストのマテリアルが無い。")
+		       TEXT("Scripts/make_ghost_material.py を実行すること"));
+		return;
+	}
+	for (int32 Slot = 0; Slot < GhostMesh->GetNumMaterials(); ++Slot)
+	{
+		GhostMesh->SetMaterial(Slot, GhostMaterial);
+	}
+}
+
+void AZN6VehicleActor::SetUpReplayFromCommandLine()
+{
+	PrepareGhostMesh();
+
+	// --- ゴースト ---------------------------------------------------------
+	//
+	// **既定でも自己ベストを読む。** メニューを触らないと出ない機能は
+	// 誰にも使われない。ファイルが無ければ黙って何もしない（初回は
+	// 当然ベストが無い）。
+	FString GhostPath;
+	if (!FParse::Value(FCommandLine::Get(), TEXT("ZN6Ghost="), GhostPath) && bAutoGhost)
+	{
+		GhostPath = ZN6::BestLapReplayPath(LoadedTrackKey);
+	}
+	if (!GhostPath.IsEmpty())
+	{
+		ZN6::FReplay Loaded;
+		FString Error;
+		if (Loaded.Load(GhostPath, Error))
+		{
+			FString Reason;
+			if (Loaded.MatchesConditions(MakeReplayHeader(), Reason))
+			{
+				SetGhost(Loaded);
+				UE_LOG(LogTemp, Display,
+				       TEXT("[ZN6] ゴースト: %s（%.3f s）"), *GhostPath,
+				       Loaded.Header.LapTimeS);
+			}
+			else
+			{
+				// **黙って出さない。** 条件が違うゴーストを並べると、
+				// 速い遅いの比較が意味を失う。
+				UE_LOG(LogTemp, Warning,
+				       TEXT("[ZN6] ゴーストを使わない（%s）: %s"), *Reason, *GhostPath);
+			}
+		}
+		else if (FPaths::FileExists(GhostPath))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[ZN6] ゴーストを読めない: %s"), *Error);
+		}
+	}
+
+	// --- 再生 -------------------------------------------------------------
+	FString ReplayPath;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ZN6Replay="), ReplayPath))
+	{
+		ZN6::FReplay Loaded;
+		FString Error;
+		if (!Loaded.Load(ReplayPath, Error))
+		{
+			UE_LOG(LogTemp, Error, TEXT("[ZN6] 記録を読めない: %s"), *Error);
+		}
+		else if (!StartPlayback(Loaded, Error))
+		{
+			UE_LOG(LogTemp, Error, TEXT("[ZN6] 再生できない: %s"), *Error);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Display, TEXT("[ZN6] 再生: %s（%d ステップ / %.3f s）"),
+			       *ReplayPath, Loaded.StepCount(), Loaded.DurationS());
+		}
+		return;   // 再生中に録り直さない
+	}
+
+	// --- 記録 -------------------------------------------------------------
+	//
+	// **既定で録る。** 録っていなければ、ベストが出ても残せない。
+	// 1 ステップ 24 バイト、1 分の走行で約 1.4 MB。
+	if (bAutoGhost || FParse::Param(FCommandLine::Get(), TEXT("ZN6Record")))
+	{
+		StartRecording();
+	}
+}
+
+void AZN6VehicleActor::OnLapCompleted()
+{
+	if (!Recorder.IsActive())
+	{
+		return;
+	}
+
+	const TArray<ZN6::FLapRecord>& Laps = Race.Laps();
+	if (Laps.Num() == 0)
+	{
+		return;
+	}
+	const ZN6::FLapRecord& Lap = Laps.Last();
+
+	ZN6::FReplay& Recorded = Recorder.Take(Lap.TimeS, Lap.bInvalidated);
+
+	// **自己ベストのときだけ残す。**
+	//
+	// `bBest` は FRaceDirector が付ける。ここで自分でタイムを比べ直すと、
+	// 判定が2箇所に分かれて必ずいつか食い違う。
+	//
+	// **コース外に出た周は残さない。** 参考記録をゴーストにすると、
+	// 「ショートカットした自分」を追いかけることになる。
+	if (Lap.bBest && !Lap.bInvalidated)
+	{
+		const FString Path = ZN6::BestLapReplayPath(LoadedTrackKey);
+		FString Error;
+		if (Recorded.Save(Path, Error))
+		{
+			UE_LOG(LogTemp, Display,
+			       TEXT("[ZN6] 自己ベストを保存: %s（%.3f s / %d ステップ）"),
+			       *Path, Lap.TimeS, Recorded.StepCount());
+			SetGhost(Recorded);
+		}
+		else
+		{
+			// **握りつぶさない。** 保存できていないのに「ベスト更新」と
+			// 出ていると、次の起動でゴーストが古いままになる。
+			UE_LOG(LogTemp, Warning, TEXT("[ZN6] 記録を保存できない: %s"), *Error);
+		}
+	}
+
+	// 次の周をあらためて録り始める
+	StartRecording();
+}
+
+void AZN6VehicleActor::UpdateGhostVisual()
+{
+	if (GhostMesh == nullptr)
+	{
+		return;
+	}
+	if (GhostReplay.Ghost.Num() == 0 || !Race.IsRacing())
+	{
+		GhostMesh->SetVisibility(false);
+		return;
+	}
+
+	// **自分の周回時刻で引く。** 経過した実時間ではない。
+	// 実時間で引くと、スタートのタイミングがずれただけで比較にならない。
+	ZN6::FGhostSample Sample;
+	if (!GhostReplay.SampleGhost(Race.CurrentLapTimeS(), Sample))
+	{
+		// 記録が尽きた（＝ゴーストはもうゴールしている）。**消す。**
+		// 最後の場所に立たせておくと「そこで止まった車」に見える。
+		GhostMesh->SetVisibility(false);
+		return;
+	}
+
+	constexpr double MetresToCentimetres = 100.0;
+	const FVector Location(
+		Sample.XM * MetresToCentimetres,
+		-Sample.YM * MetresToCentimetres,
+		Sample.ZM * MetresToCentimetres);
+	// 物理のヨーは左が正、UE は右が正（SyncVisualToPhysics と同じ約束）。
+	const FRotator Rotation(
+		FMath::RadiansToDegrees(Sample.PitchRad),
+		-FMath::RadiansToDegrees(Sample.YawRad),
+		FMath::RadiansToDegrees(Sample.RollRad));
+
+	GhostMesh->SetWorldLocationAndRotation(Location, Rotation);
+	GhostMesh->SetVisibility(true);
 }
 
 FString AZN6VehicleActor::GearLabel() const

@@ -18,6 +18,7 @@
 #include "GameFramework/Pawn.h"
 #include "Audio/ZN6VehicleAudioComponent.h"
 #include "Game/ZN6RaceDirector.h"
+#include "Game/ZN6Replay.h"
 #include "UI/ZN6HudSnapshot.h"
 #include "UI/ZN6Livery.h"
 #include "Visual/ZN6TyreMarkComponent.h"
@@ -468,6 +469,41 @@ public:
 	void ApplyDriverInputForTest(float DeltaSeconds) { ApplyDriverInput(DeltaSeconds); }
 	void SetAttitudeFeelForTest(const FZN6BodyAttitudeFeel& InFeel) { AttitudeFeel = InFeel; }
 
+	// --- リプレイ / ゴースト -----------------------------------------------
+	//
+	// **遊びの機能である以上に、検証の道具**（`Docs/SPEC_GT7_GAP.md` §9）。
+	// 操作を固定して条件だけを変えれば、「セッティングが効いたのか運転が
+	// 良かったのか」を分離できる。
+
+	/** 今の条件（コース・車両・セッティング・刻み）で見出しを作る。 */
+	ZN6::FReplayHeader MakeReplayHeader() const;
+
+	/** 記録を始める。**すでに録っていれば録り直しになる。** */
+	void StartRecording();
+	void StopRecording() { Recorder.Stop(); }
+	bool IsRecording() const { return Recorder.IsActive(); }
+
+	/**
+	 * 記録した操作を再生する。
+	 *
+	 * 条件が違えば `OutError` に理由を入れて false。**黙って再生しない**
+	 * （別の車・別のコースの記録を再生した軌跡は「同じ操作をしたときの
+	 * 姿」ではない）。
+	 */
+	bool StartPlayback(const ZN6::FReplay& InReplay, FString& OutError);
+	void StopPlayback();
+	bool IsPlayingBack() const { return Player.IsActive(); }
+
+	/** ゴーストを出す。空の記録を渡すと消える。 */
+	void SetGhost(const ZN6::FReplay& InGhost);
+	void ClearGhost();
+	bool HasGhost() const { return GhostReplay.Ghost.Num() > 0; }
+	double GhostLapTimeS() const { return GhostReplay.Header.LapTimeS; }
+
+	const ZN6::FReplay& GetRecordedForTest() const { return Recorder.Peek(); }
+	const ZN6::FReplay& GetGhostForTest() const { return GhostReplay; }
+	FString GetTrackKeyForTest() const { return LoadedTrackKey; }
+
 protected:
 	/** 追従カメラ。**描画専用で、物理には一切関与しない。** */
 	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
@@ -568,6 +604,18 @@ private:
 
 	/** テレメトリ用の段の表示（"R" / "N" / "3速"）。 */
 	FString GearLabel() const;
+
+	/** ゴーストの車体に、自車と同じメッシュと半透明マテリアルを入れる。 */
+	void PrepareGhostMesh();
+
+	/** 起動オプション（`-ZN6Record` / `-ZN6Replay=` / `-ZN6Ghost=`）を見る。 */
+	void SetUpReplayFromCommandLine();
+
+	/** 周が1つ終わったとき。**物理ステップの中から呼ぶ。** */
+	void OnLapCompleted();
+
+	/** ゴーストの車体を今の時刻の場所へ置く。**描画だけ。** */
+	void UpdateGhostVisual();
 
 	/** 生の入力を、時間をかけて Control へ反映する。 */
 	void ApplyDriverInput(float DeltaSeconds);
@@ -744,6 +792,35 @@ private:
 
 	/** 今のセッティングと、その調整範囲。 */
 	ZN6::FCarSetup Setup;
+
+	// --- リプレイ ---------------------------------------------------------
+	ZN6::FReplayRecorder Recorder;
+	ZN6::FReplayPlayer Player;
+
+	/** ゴーストの記録。**軌跡だけを使う**（操作は要らない）。 */
+	ZN6::FReplay GhostReplay;
+
+	/** ゴーストの車体。**当たり判定は持たない。すり抜ける。** */
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> GhostMesh;
+
+	/** どのコースを読んだか。記録の照合に使う。 */
+	FString LoadedTrackKey;
+
+	/** 読んだ `vehicle.json` の場所。記録の照合に使う。 */
+	FString LoadedVehiclePath;
+
+	/**
+	 * 自己ベストが出たらゴーストとして保存するか。
+	 *
+	 * **既定で入れる。** メニューを触らなくても「前の自分」と走れる
+	 * ようにしておかないと、この機能は誰にも使われない。
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Replay")
+	bool bAutoGhost = true;
+
+	/** 直前に見た完了周回数。ベスト更新の検出に使う。 */
+	int32 LastSeenLapCount = 0;
 	ZN6::FSetupLimits SetupLimits;
 	bool bSetupLimitsReady = false;
 

@@ -212,6 +212,7 @@ namespace ZN6
 		}
 
 		// **コース外に出た周はベストにしない。** 記録は残すが印を付ける。
+		Record.bInvalidated = bLapInvalidated;
 		if (!bLapInvalidated && (BestLapTimeS <= 0.0 || LapTimeS < BestLapTimeS))
 		{
 			BestLapTimeS = LapTimeS;
