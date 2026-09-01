@@ -26,9 +26,21 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from Tracks.physics_test_track import closure_error, physics_test_track  # noqa: E402
+sys.path.insert(0, str(REPO_ROOT / "Tracks"))
 
-OUTPUT = REPO_ROOT / "Tracks" / "physics_test_track.json"
+from Tracks.physics_test_track import closure_error  # noqa: E402
+from Tracks.track_catalogue import CATALOGUE, build  # noqa: E402
+
+OUTPUT_DIR = REPO_ROOT / "Tracks"
+
+#: 既定のコース。**書き出し先の名前は昔のままにする。**
+#: Blender と UE の既定の読み先が physics_test_track.json なので、
+#: ここを変えると両方を同時に直す必要がある。
+DEFAULT_KEY = "physics_test_track"
+
+
+def output_path(key: str) -> Path:
+    return OUTPUT_DIR / ("{}.json".format(key))
 
 # 路肩の余裕 [m]。**路面はここまで作り、樹木はこれより外に置く。**
 # 車がコースアウトしたときに木へ突っ込むのは、物理に衝突判定が無いので
@@ -40,8 +52,9 @@ TREE_MIN_OFFSET_M = 18.0
 TREE_MAX_OFFSET_M = 70.0
 
 
-def main() -> int:
-    track = physics_test_track(spacing_m=1.0)
+def export(key: str) -> int:
+    track = build(key, spacing_m=1.0)
+    output = output_path(key)
 
     position_error, heading_error = closure_error(track)
     # **閉じていないコースを書き出さない。** 終端で中心線が始点へ飛ぶと、
@@ -74,7 +87,7 @@ def main() -> int:
     payload = {
         "_meta": {
             "generator": "Tools/export_track.py",
-            "source": "Tracks/physics_test_track.py",
+            "source": "Tracks/track_catalogue.py:{}".format(key),
             "purpose": (
                 "物理と描画で同じコース形状を使うための受け渡し。"
                 "**このファイルを手で編集しないこと。** 形状の定義は "
@@ -93,15 +106,15 @@ def main() -> int:
         "points": points,
     }
 
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    with OUTPUT.open("w", encoding="utf-8") as handle:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=1)
         handle.write("\n")
 
     xs = [p.x_m for p in track.points]
     ys = [p.y_m for p in track.points]
 
-    print("書き出した: {}".format(OUTPUT.relative_to(REPO_ROOT)))
+    print("書き出した: {}".format(output.relative_to(REPO_ROOT)))
     print("  周長     : {:.1f} m（点 {} 個、間隔 {:.2f} m）".format(
         track.length_m, len(track.points), payload["spacing_m"]))
     print("  路面幅   : {:.1f} m（路肩 +{:.1f} m）".format(track.width_m, SHOULDER_M))
@@ -113,6 +126,19 @@ def main() -> int:
     for label, info in sorted(labels.items(), key=lambda kv: kv[1]["start_s_m"]):
         print("    {:<16s} {:6.1f} m から {:5d} m 分".format(
             label, info["start_s_m"], info["count"]))
+    print()
+    return 0
+
+
+def main() -> int:
+    keys = sys.argv[1:] or sorted(CATALOGUE)
+    for key in keys:
+        if key not in CATALOGUE:
+            print("ERROR: 知らないコース: {}（ある: {}）".format(
+                key, ", ".join(sorted(CATALOGUE))), file=sys.stderr)
+            return 1
+        if export(key) != 0:
+            return 1
     return 0
 
 

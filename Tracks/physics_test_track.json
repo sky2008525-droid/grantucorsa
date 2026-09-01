@@ -1,7 +1,7 @@
 {
  "_meta": {
   "generator": "Tools/export_track.py",
-  "source": "Tracks/physics_test_track.py",
+  "source": "Tracks/track_catalogue.py:physics_test_track",
   "purpose": "物理と描画で同じコース形状を使うための受け渡し。**このファイルを手で編集しないこと。** 形状の定義は physics_test_track.py にしかない。変えたら再生成する。",
   "frame": "physics (X forward-ish, Y left, Z up, metres, right-handed)"
  },
