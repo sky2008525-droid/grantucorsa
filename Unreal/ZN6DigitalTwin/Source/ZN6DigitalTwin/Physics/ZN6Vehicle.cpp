@@ -169,12 +169,30 @@ namespace ZN6
 		if (bLocked)
 		{
 			// 拘束。エンジンは変速機入力と一体で回る
+			//
+			// **変速機側がアイドルより遅いときは、アイドル制御がエンジンを
+			// 支えている。** 実車の ECU は回転が落ちると燃料を足して回転を保つ。
+			const bool bGoverned = GearboxOmegaRads < IdleOmegaRads;
 			const double Omega = FMath::Max(GearboxOmegaRads, IdleOmegaRads);
 			const double EngineTorque = Engine.TorqueNm(Omega, Control.Throttle);
 
 			// エンジンが出したトルクはそのままクラッチを通る。慣性による
 			// 抵抗は、車輪側に反映した等価慣性が受け持つ。
 			double ClutchTorque = EngineTorque;
+			if (bGoverned)
+			{
+				// **支えられているエンジンは駆動系を後ろへ引けない。**
+				//
+				// 回転をアイドルで切り上げているだけだった間は、停車中に
+				// 1速でクラッチを繋ぐと閉じスロットルの負トルクが残り、車が
+				// 後ろへ 0.3 m/s でずり下がった。前後速度を 0 で切り上げて
+				// いたので見えていなかっただけである。
+				//
+				// 実車ではこの状態は「アイドル制御が支える」か「エンストする」
+				// のどちらかで、**後ろへ押す**ことはない。エンストは別途
+				// モデル化していないので、ここでは支える側を採る。
+				ClutchTorque = FMath::Max(ClutchTorque, 0.0);
+			}
 			if (FMath::Abs(ClutchTorque) > Capacity)
 			{
 				ClutchTorque = FMath::Sign(ClutchTorque) * Capacity;
@@ -250,16 +268,46 @@ namespace ZN6
 		const double RearOmegaMean =
 			(State.WheelOmegaRads[static_cast<int32>(EWheel::RL)] +
 			 State.WheelOmegaRads[static_cast<int32>(EWheel::RR)]) / 2.0;
-		const double GearboxOmega = Drivetrain.EngineOmegaRads(RearOmegaMean, Control.GearIndex);
+
+		// **ニュートラルでは歯車が噛んでいない。**
+		//
+		// クラッチペダルをどこまで戻していても、変速機の中で入力軸と出力軸が
+		// 繋がっていないので車輪へトルクは行かない。クラッチを切ったのと
+		// 同じ扱い（Clutch = 0）にすると、
+		//
+		//   - クラッチ容量が 0 になり伝達トルクが 0
+		//   - bClutchLocked が false になり、車輪慣性にエンジン慣性を足す枝も
+		//     自動的に外れる
+		//
+		// が同時に成り立つ。**「だいたい同じだから」ではなく、動力の通り道が
+		// 無いという同じ理由で同じ式になる。**
+		const bool bNeutral = (Control.GearIndex == GearNeutral);
+
+		FControlInput EngineControl = Control;
+		double GearboxOmega = 0.0;
+		if (bNeutral)
+		{
+			// 変速機入力軸は空転する。意味の無い値を渡さないよう、
+			// 回転差が出ないエンジン回転をそのまま入れる（容量 0 なので
+			// 結果には効かない）。
+			GearboxOmega = State.EngineOmegaRads;
+			EngineControl.Clutch = 0.0;
+		}
+		else
+		{
+			GearboxOmega = Drivetrain.EngineOmegaRads(RearOmegaMean, Control.GearIndex);
+		}
 
 		double EngineOmega = 0.0;
 		double ClutchTorque = 0.0;
 		double EngineTorque = 0.0;
 		bool bClutchLocked = false;
-		IntegrateEngine(State.EngineOmegaRads, GearboxOmega, Control, DtS,
+		IntegrateEngine(State.EngineOmegaRads, GearboxOmega, EngineControl, DtS,
 		                EngineOmega, ClutchTorque, EngineTorque, bClutchLocked);
 
-		const double AxleTorque = Drivetrain.WheelTorqueNm(ClutchTorque, Control.GearIndex);
+		const double AxleTorque = bNeutral
+			? 0.0
+			: Drivetrain.WheelTorqueNm(ClutchTorque, Control.GearIndex);
 
 		double TorqueRL = 0.0;
 		double TorqueRR = 0.0;
@@ -316,7 +364,7 @@ namespace ZN6
 			// 換算して足す（1速では総比^2 = 約221倍になり支配的）。
 			// 滑っている間はエンジンが切り離されているので足さない。
 			double Inertia = WheelInertiaKgm2;
-			if (IsRearWheel(Wheel) && bClutchLocked)
+			if (IsRearWheel(Wheel) && bClutchLocked && !bNeutral)
 			{
 				Inertia += Drivetrain.ReflectedInertiaAtWheelKgm2(Control.GearIndex) / 2.0;
 			}
@@ -414,7 +462,16 @@ namespace ZN6
 		LastAxMps2 = AxMps2;
 		LastAyMps2 = AyMps2;
 
-		OutState.VxMps = FMath::Max(State.VxMps + VxDot * DtS, 0.0);
+		// **前後速度を 0 で切り上げない。**
+		//
+		// 以前は FMath::Max(..., 0.0) で負を潰していた。前進しか無かった間は
+		// 「止まっているのに後ろへずり下がる」のを防いでいたが、**後退に
+		// 入れても車が動かない**という形で表に出た（加速度は正しく負を
+		// 向いているのに、速度が毎ステップ 0 に戻されていた）。
+		//
+		// 止まった車が勝手に下がらないことは、タイヤ力と制動トルクが受け持つ
+		// べきで、状態変数を切り上げて作る性質ではない。
+		OutState.VxMps = State.VxMps + VxDot * DtS;
 		OutState.VyMps = State.VyMps + VyDot * DtS;
 		OutState.YawRateRads = State.YawRateRads + YawAccel * DtS;
 		OutState.XM = State.XM + (State.VxMps * std::cos(State.HeadingRad)
@@ -443,7 +500,10 @@ namespace ZN6
 		const double Omega = SpeedMps / WheelRadiusM;
 
 		State.VxMps = SpeedMps;
-		State.EngineOmegaRads = FMath::Max(Drivetrain.EngineOmegaRads(Omega, GearIndex), IdleOmegaRads);
+		// ニュートラルでは噛んでいないので車速からエンジン回転を決められない。
+		State.EngineOmegaRads = (GearIndex == GearNeutral)
+			? IdleOmegaRads
+			: FMath::Max(Drivetrain.EngineOmegaRads(Omega, GearIndex), IdleOmegaRads);
 		for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
 		{
 			State.WheelOmegaRads[Wheel] = Omega;

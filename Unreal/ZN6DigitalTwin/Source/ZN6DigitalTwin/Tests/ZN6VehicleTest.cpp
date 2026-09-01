@@ -53,9 +53,16 @@ namespace
 		return true;
 	}
 
-	/** ギア名（"1"-"6"）を 0 起点の添字へ。 */
+	/**
+	 * ギア名（"1"-"6" / "N" / "R"）を添字へ。
+	 *
+	 * Python 側は段を文字列で持ち、C++ は添字で持つ。**この対応表が
+	 * 両者の唯一の接点**なので、片方に段を足したらここも足すこと。
+	 */
 	bool GearNameToIndex(const FString& GearName, int32& OutIndex)
 	{
+		if (GearName == TEXT("N")) { OutIndex = ZN6::GearNeutral; return true; }
+		if (GearName == TEXT("R")) { OutIndex = ZN6::GearReverse; return true; }
 		for (int32 Index = 0; Index < ZN6::ForwardGearCount; ++Index)
 		{
 			if (GearName == ZN6::ForwardGears[Index])

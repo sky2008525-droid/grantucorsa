@@ -454,6 +454,14 @@ public:
 	// 舵角の即時最大化のような壊れ方が誰にも気づかれない。
 	void ShiftUpForTest() { ShiftUp(); }
 	void ShiftDownForTest() { ShiftDown(); }
+	void SelectGearForTest(int32 GearIndex) { SetGearAbsolute(GearIndex); }
+	int32 GetGearIndexForTest() const { return Control.GearIndex; }
+	int32 GetDisplayGearForTest() const { return DisplayGear(); }
+	void GearAxisForTest(float Value) { InputGearAbsolute(Value); }
+	void SetClutchInputForTest(float Value) { RawClutch = Value; }
+	void SetAnalogInputForTest(bool bAnalog) { bAnalogInput = bAnalog; }
+	bool IsAnalogInputForTest() const { return bAnalogInput; }
+	double GetSteerRadForTest() const { return Control.SteerRad; }
 	void SetSteerInputForTest(float Value) { RawSteer = Value; }
 	void SetThrottleInputForTest(float Value) { RawThrottle = Value; }
 	void SetBrakeInputForTest(float Value) { RawBrake = Value; }
@@ -471,6 +479,28 @@ protected:
 	/** 操作感の設定。**車両仕様ではない**（憲法ルール18）。 */
 	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
 	FZN6DriverFeel DriverFeel;
+
+	/**
+	 * アナログ機器（ハンドル・パッドのトリガ）で運転しているか。
+	 *
+	 * **自動で切り替えない。** 切り替えると、出たラップタイムが
+	 * どちらの操作系で出たものか記録に残らなくなる（憲法ルール3の
+	 * 「辻褄合わせ」に近い形で、比較できない数字が混ざる）。
+	 * `-ZN6Analog` かメニューから明示的に入れる。
+	 *
+	 * 何が変わるか（`ApplyDriverInput`）:
+	 *
+	 *   - ペダルと操舵の**平滑化を切る**。アナログ機器は踏み込み量を
+	 *     持っているので、時間をかけて寄せると**ある情報を捨てる**
+	 *     ことになる（ペダル 0.25 秒遅れ、操舵フルロック 0.40 秒遅れ）
+	 *   - **速度による舵角の絞りを切る**。絞ると、ハンドルの同じ角度が
+	 *     速度によって違う舵角を意味してしまう（100 km/h で 25.5 度 ->
+	 *     11.3 度）。これはハンドルを持っている人にとっては壊れた挙動
+	 *
+	 * どちらもキーボード（0 か 1 しか出せない）には正しい補助である。
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
+	bool bAnalogInput = false;
 
 	/** 画面にテレメトリを出すか。 */
 	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
@@ -493,6 +523,52 @@ private:
 	void ShiftUp();
 	void ShiftDown();
 
+	/**
+	 * 段を**絶対値で**入れる。H パターンシフターの口。
+	 *
+	 * シーケンシャル（パドル・ボタン）の口である ShiftUp / ShiftDown は
+	 * 「1段上げる／下げる」という**相対**の命令で、H パターンが持つ
+	 * 「今 3速に入っている」という情報を入れられない。相対の口に絶対の
+	 * 情報を入れると、取りこぼしが起きたときに**シフターの位置と
+	 * ゲーム内の段がずれたまま戻らない。**
+	 */
+	void SetGearAbsolute(int32 GearIndex);
+
+	// H パターン／キーボード直接指定の受け口
+	void SelectGear1();
+	void SelectGear2();
+	void SelectGear3();
+	void SelectGear4();
+	void SelectGear5();
+	void SelectGear6();
+	void SelectGearNeutral();
+	void SelectGearReverse();
+
+	/**
+	 * GameInput のパターンシフターの軸。
+	 *
+	 * **段の番号がそのまま軸の値で来る**（0 = ニュートラル、正 = 前進、
+	 * 負 = 後退）。押した瞬間ではなく「今どこに入っているか」が
+	 * 毎フレーム来るので、変化したときだけ入れ替える。
+	 */
+	void InputGearAbsolute(float Value);
+
+	/**
+	 * R -> N -> 1 -> 2 ... 6 の並びでの位置。
+	 *
+	 * **前進段の添字とは別物。** シーケンシャルで上げ下げするときだけ
+	 * この並びを使う。`GearIndex` は前進 0..5 と N(-1) / R(-2) で、
+	 * 連番になっていない。
+	 */
+	static int32 GearToSequence(int32 GearIndex);
+	static int32 SequenceToGear(int32 Sequence);
+
+	/** 画面に出す段。**R = -1、N = 0、前進 = 1..6。** */
+	int32 DisplayGear() const;
+
+	/** テレメトリ用の段の表示（"R" / "N" / "3速"）。 */
+	FString GearLabel() const;
+
 	/** 生の入力を、時間をかけて Control へ反映する。 */
 	void ApplyDriverInput(float DeltaSeconds);
 
@@ -504,6 +580,16 @@ private:
 	float RawSteer = 0.0f;
 	float RawClutch = 0.0f;
 	float RawHandbrake = 0.0f;
+
+	/**
+	 * パターンシフターの軸の前回値。
+	 *
+	 * **毎フレーム同じ値が来る**ので、変わったときだけ段を入れ替える。
+	 * 毎フレーム入れ直すと、キーボードで入れた段を軸が上書きし続けて
+	 * 変速できなくなる。
+	 */
+	float LastGearAxis = 0.0f;
+	bool bHasGearAxis = false;
 
 protected:
 	/** **描画専用。** 物理はこのコンポーネントを一切参照しない。 */

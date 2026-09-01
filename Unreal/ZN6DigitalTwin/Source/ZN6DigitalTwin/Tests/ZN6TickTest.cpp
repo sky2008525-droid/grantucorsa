@@ -502,7 +502,13 @@ bool FZN6DriverInputIsSane::RunTest(const FString& Parameters)
 	{
 		Actor->ShiftDownForTest();
 	}
-	TestEqual(TEXT("下限を下回って変速しない"), Actor->GetControl().GearIndex, 0);
+	// **下限は R。** 並びは R -> N -> 1 ... 6（H パターン対応で N と R が
+	// 入った）。ここが 1速で止まっていたときは、シフターを繋いでも
+	// バックに入れられなかった。
+	TestEqual(TEXT("下限を下回って変速しない"),
+	          Actor->GetControl().GearIndex, ZN6::GearReverse);
+	TestTrue(TEXT("下限も選べる段の中にある"),
+	         ZN6::IsSelectableGear(Actor->GetControl().GearIndex));
 
 	// --- 舵角が一瞬で最大にならないか ---
 	//

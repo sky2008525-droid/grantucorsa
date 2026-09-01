@@ -297,6 +297,36 @@ void AZN6VehicleActor::CreateHud()
 	//
 	// **画面を人手なしで撮れるようにしておく。** これが無いと、
 	// 「メニューの奥の画面」を誰も見ないまま完成と呼ぶことになる。
+	// **アナログ機器で運転するかは明示的に決める。**
+	// 挿してあるかで自動判定しない（どちらの操作系で出たラップかが
+	// 記録に残らなくなる）。
+	if (FParse::Param(FCommandLine::Get(), TEXT("ZN6Analog")))
+	{
+		bAnalogInput = true;
+		UE_LOG(LogTemp, Display,
+		       TEXT("[ZN6] アナログ入力: 平滑化と速度による舵角の絞りを切る"));
+	}
+
+	// **段を指定して起動できるようにする。** N と R が画面にどう出るかを
+	// 人手なしで撮るための口（`-ZN6Gear=N` / `-ZN6Gear=R` / `-ZN6Gear=3`）。
+	FString StartGear;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ZN6Gear="), StartGear))
+	{
+		if (StartGear.Equals(TEXT("N"), ESearchCase::IgnoreCase))
+		{
+			SetGearAbsolute(ZN6::GearNeutral);
+		}
+		else if (StartGear.Equals(TEXT("R"), ESearchCase::IgnoreCase))
+		{
+			SetGearAbsolute(ZN6::GearReverse);
+		}
+		else
+		{
+			SetGearAbsolute(FCString::Atoi(*StartGear) - 1);
+		}
+		UE_LOG(LogTemp, Display, TEXT("[ZN6] 起動時の段: %s"), *GearLabel());
+	}
+
 	int32 StartPaint = 0;
 	if (FParse::Value(FCommandLine::Get(), TEXT("ZN6Paint="), StartPaint))
 	{
@@ -439,6 +469,14 @@ void AZN6VehicleActor::TickAutoShift(float DeltaSeconds)
 	}
 
 	const double Rpm = ZN6::RadsToRpm(PhysicsState.EngineOmegaRads);
+
+	// **自動変速は前進段の中だけで動く。**
+	// N と R は運転者が意図して入れるもので、回転数で勝手に入れられては
+	// 困る（ShiftDown は並びの上では 1速 -> N -> R と下がれてしまう）。
+	if (Control.GearIndex < 0)
+	{
+		return;
+	}
 
 	if (Rpm > Assists.UpshiftRpm && Control.GearIndex < ZN6::ForwardGearCount - 1)
 	{
@@ -597,7 +635,7 @@ ZN6::FHudSnapshot AZN6VehicleActor::MakeHudSnapshot() const
 
 	Snapshot.SpeedKmh = PhysicsState.SpeedMps() * ZN6::KmhPerMps;
 	Snapshot.EngineRpm = ZN6::RadsToRpm(PhysicsState.EngineOmegaRads);
-	Snapshot.Gear = Control.GearIndex + 1;
+	Snapshot.Gear = DisplayGear();
 	Snapshot.Throttle = Control.Throttle;
 	Snapshot.Brake = Control.Brake;
 	Snapshot.ClutchEngagement = Control.Clutch;
@@ -1415,6 +1453,30 @@ void AZN6VehicleActor::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	                                 this, &AZN6VehicleActor::ResetToStart);
 	PlayerInputComponent->BindAction(TEXT("ZN6_Menu"), IE_Pressed,
 	                                 this, &AZN6VehicleActor::ToggleMenu);
+
+	// --- H パターン（絶対指定）-------------------------------------------
+	//
+	// 実機（TH8A）が無いので、**キーボードの 1-6 / N / 0 にも同じ口を
+	// 割り当ててある**（`Config/DefaultInput.ini`）。シフターが無くても
+	// この経路そのものは動かして確かめられる。
+	PlayerInputComponent->BindAction(TEXT("ZN6_Gear1"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::SelectGear1);
+	PlayerInputComponent->BindAction(TEXT("ZN6_Gear2"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::SelectGear2);
+	PlayerInputComponent->BindAction(TEXT("ZN6_Gear3"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::SelectGear3);
+	PlayerInputComponent->BindAction(TEXT("ZN6_Gear4"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::SelectGear4);
+	PlayerInputComponent->BindAction(TEXT("ZN6_Gear5"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::SelectGear5);
+	PlayerInputComponent->BindAction(TEXT("ZN6_Gear6"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::SelectGear6);
+	PlayerInputComponent->BindAction(TEXT("ZN6_GearNeutral"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::SelectGearNeutral);
+	PlayerInputComponent->BindAction(TEXT("ZN6_GearReverse"), IE_Pressed,
+	                                 this, &AZN6VehicleActor::SelectGearReverse);
+	PlayerInputComponent->BindAxis(TEXT("ZN6_GearAbsolute"),
+	                               this, &AZN6VehicleActor::InputGearAbsolute);
 }
 
 void AZN6VehicleActor::InputThrottle(float Value) { RawThrottle = Value; }
@@ -1423,15 +1485,123 @@ void AZN6VehicleActor::InputSteer(float Value) { RawSteer = Value; }
 void AZN6VehicleActor::InputClutch(float Value) { RawClutch = Value; }
 void AZN6VehicleActor::InputHandbrake(float Value) { RawHandbrake = Value; }
 
+int32 AZN6VehicleActor::GearToSequence(int32 GearIndex)
+{
+	// R(0) -> N(1) -> 1速(2) ... 6速(7)
+	if (GearIndex == ZN6::GearReverse) { return 0; }
+	if (GearIndex == ZN6::GearNeutral) { return 1; }
+	return GearIndex + 2;
+}
+
+int32 AZN6VehicleActor::SequenceToGear(int32 Sequence)
+{
+	if (Sequence <= 0) { return ZN6::GearReverse; }
+	if (Sequence == 1) { return ZN6::GearNeutral; }
+	return FMath::Min(Sequence - 2, ZN6::ForwardGearCount - 1);
+}
+
 void AZN6VehicleActor::ShiftUp()
 {
 	// **上限を超えない。** 存在しないギアを入れると TotalRatio が check で落ちる。
-	Control.GearIndex = FMath::Min(Control.GearIndex + 1, ZN6::ForwardGearCount - 1);
+	//
+	// 並びは R -> N -> 1 ... 6。前進段の添字をそのまま +1 していた間は、
+	// N も R も通り道が無かった。
+	const int32 Top = GearToSequence(ZN6::ForwardGearCount - 1);
+	SetGearAbsolute(SequenceToGear(
+		FMath::Min(GearToSequence(Control.GearIndex) + 1, Top)));
 }
 
 void AZN6VehicleActor::ShiftDown()
 {
-	Control.GearIndex = FMath::Max(Control.GearIndex - 1, 0);
+	SetGearAbsolute(SequenceToGear(
+		FMath::Max(GearToSequence(Control.GearIndex) - 1, 0)));
+}
+
+void AZN6VehicleActor::SetGearAbsolute(int32 GearIndex)
+{
+	// **知らない段を黙って受け取らない**（憲法ルール6）。
+	// ここを通さずに Control.GearIndex を直接書き換えないこと。
+	if (!ZN6::IsSelectableGear(GearIndex))
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("[ZN6] 選べない段が来た: %d。無視する"), GearIndex);
+		return;
+	}
+	Control.GearIndex = GearIndex;
+}
+
+void AZN6VehicleActor::SelectGear1() { SetGearAbsolute(0); }
+void AZN6VehicleActor::SelectGear2() { SetGearAbsolute(1); }
+void AZN6VehicleActor::SelectGear3() { SetGearAbsolute(2); }
+void AZN6VehicleActor::SelectGear4() { SetGearAbsolute(3); }
+void AZN6VehicleActor::SelectGear5() { SetGearAbsolute(4); }
+void AZN6VehicleActor::SelectGear6() { SetGearAbsolute(5); }
+void AZN6VehicleActor::SelectGearNeutral() { SetGearAbsolute(ZN6::GearNeutral); }
+void AZN6VehicleActor::SelectGearReverse() { SetGearAbsolute(ZN6::GearReverse); }
+
+void AZN6VehicleActor::InputGearAbsolute(float Value)
+{
+	// **軸は毎フレーム同じ値を出し続ける。**
+	// 毎フレーム入れ直すと、キーボードで入れた段を上書きし続けて
+	// 変速できなくなる。変わったときだけ入れ替える。
+	if (bHasGearAxis && FMath::IsNearlyEqual(Value, LastGearAxis, 0.01f))
+	{
+		return;
+	}
+
+	// **最初の 1 回は覚えるだけで、入れない。**
+	//
+	// シフターが繋がっていなければこの軸は常に 0 のまま来る。それを
+	// 「ニュートラルに入れろ」という命令として受けると、起動直後に
+	// 段が毎回 N へ落ちる。実際に `-ZN6Gear=R` で起動して撮った画面が
+	// N のままで、車も 1 mm も動かなかった。
+	//
+	// **画面を見るまでこれは分からなかった。** 上のコメントには
+	// 「最初の1回で 0 を覚え、以後は変化だけを見る」と書いてあったのに、
+	// 覚えたあとそのまま適用へ落ちていた。
+	const bool bFirstSample = !bHasGearAxis;
+	LastGearAxis = Value;
+	bHasGearAxis = true;
+
+	const int32 Rounded = FMath::RoundToInt(Value);
+
+	if (bFirstSample && Rounded == 0)
+	{
+		// 繋がっていない軸と、ニュートラルに入ったシフターは**同じ 0** を
+		// 出す。区別できないので、起動直後の 0 は「繋がっていない」と
+		// 読む。実機がニュートラルで始まった場合は、最初にシフターを
+		// 動かした時点で追いつく。
+		//
+		// 逆にした場合（0 を素直に受ける）は、**シフターが無い環境で
+		// 必ず壊れる**（起動するたび段が N へ落ちる）。
+		return;
+	}
+	if (Rounded == 0)
+	{
+		SetGearAbsolute(ZN6::GearNeutral);
+	}
+	else if (Rounded < 0)
+	{
+		SetGearAbsolute(ZN6::GearReverse);
+	}
+	else
+	{
+		SetGearAbsolute(FMath::Clamp(Rounded - 1, 0, ZN6::ForwardGearCount - 1));
+	}
+}
+
+FString AZN6VehicleActor::GearLabel() const
+{
+	if (Control.GearIndex == ZN6::GearReverse) { return TEXT("R"); }
+	if (Control.GearIndex == ZN6::GearNeutral) { return TEXT("N"); }
+	return FString::Printf(TEXT("%d速"), Control.GearIndex + 1);
+}
+
+int32 AZN6VehicleActor::DisplayGear() const
+{
+	if (Control.GearIndex == ZN6::GearReverse) { return -1; }
+	if (Control.GearIndex == ZN6::GearNeutral) { return 0; }
+	return Control.GearIndex + 1;
 }
 
 void AZN6VehicleActor::ApplyDriverInput(float DeltaSeconds)
@@ -1454,13 +1624,22 @@ void AZN6VehicleActor::ApplyDriverInput(float DeltaSeconds)
 	// 止めてしまうと、スタート前に車が坂を転がることさえ再現できなくなる。
 	const float Gate = static_cast<float>(Race.InputScale());
 
+	// **アナログ機器では平滑化を切る。**
+	//
+	// ペダルの踏み込み量をそのまま持っている入力に対して時間をかけて
+	// 寄せると、**すでに手に入っている情報を捨てる**ことになる
+	// （立ち上がり 4/s では 0 -> 全開に 0.25 秒かかる）。
+	// キーボードの 0/1 に対しては正しい補助なので、両方残して切り替える。
+	const float TargetThrottle = Gate * FMath::Clamp(RawThrottle, 0.0f, 1.0f);
+	const float TargetBrake = Gate * FMath::Clamp(RawBrake, 0.0f, 1.0f);
+
 	const float PedalRate = DriverFeel.PedalRatePerS;
-	Control.Throttle = Approach(static_cast<float>(Control.Throttle),
-	                            Gate * FMath::Clamp(RawThrottle, 0.0f, 1.0f),
-	                            PedalRate);
-	Control.Brake = Approach(static_cast<float>(Control.Brake),
-	                         Gate * FMath::Clamp(RawBrake, 0.0f, 1.0f),
-	                         PedalRate);
+	Control.Throttle = bAnalogInput
+		? TargetThrottle
+		: Approach(static_cast<float>(Control.Throttle), TargetThrottle, PedalRate);
+	Control.Brake = bAnalogInput
+		? TargetBrake
+		: Approach(static_cast<float>(Control.Brake), TargetBrake, PedalRate);
 
 	// クラッチは踏むと切れる（0 = 切、1 = 繋）。**入力の意味を反転させる。**
 	Control.Clutch = 1.0 - FMath::Clamp(RawClutch, 0.0f, 1.0f);
@@ -1472,17 +1651,41 @@ void AZN6VehicleActor::ApplyDriverInput(float DeltaSeconds)
 	// ない**（憲法ルール18）。キーボードには「少しだけ切る」が無いため、
 	// これが無いと直線で軽く当てただけでスピンする。
 	const double SpeedMps = FMath::Abs(PhysicsState.VxMps);
-	const double Falloff = 1.0 / (1.0 + DriverFeel.SteerSpeedFalloffPerMps * SpeedMps);
+
+	// **ハンドルを持っているときは絞らない。**
+	//
+	// 絞ると、ハンドルの同じ角度が速度によって違う舵角を意味する
+	// （100 km/h で最大 25.5 度 -> 11.3 度）。キーボードには「少しだけ
+	// 切る」が無いので絞りが要るが、角度を持っている入力に対しては
+	// 操作と結果の対応が壊れるだけである。
+	//
+	// なお、**ハンドルの回転角から舵角への対応は物理的に導けない。**
+	// `steering.gear_ratio` と `lock_to_lock` が vehicle.json で
+	// "unknown" のため。ここで軸 -1..1 を最大舵角へ線形に割り当てて
+	// いるのは**演出**である（憲法ルール18）。
+	const double Falloff = bAnalogInput
+		? 1.0
+		: 1.0 / (1.0 + DriverFeel.SteerSpeedFalloffPerMps * SpeedMps);
 	const double SteerLimit = MaxSteerRad * Falloff;
 
 	const float Target = Gate * FMath::Clamp(RawSteer, -1.0f, 1.0f);
-	const bool bReturning = FMath::IsNearlyZero(Target);
-	const float Rate = bReturning
-		? DriverFeel.SteerReturnRateRadPerS
-		: DriverFeel.SteerRateRadPerS;
 
-	Control.SteerRad = Approach(static_cast<float>(Control.SteerRad),
-	                            Target * static_cast<float>(SteerLimit), Rate);
+	if (bAnalogInput)
+	{
+		// 速度制限も掛けない。ハンドルを切った角度がそのまま舵角になる。
+		// **FR のカウンターステアは 0.40 秒待てない。**
+		Control.SteerRad = Target * SteerLimit;
+	}
+	else
+	{
+		const bool bReturning = FMath::IsNearlyZero(Target);
+		const float Rate = bReturning
+			? DriverFeel.SteerReturnRateRadPerS
+			: DriverFeel.SteerRateRadPerS;
+
+		Control.SteerRad = Approach(static_cast<float>(Control.SteerRad),
+		                            Target * static_cast<float>(SteerLimit), Rate);
+	}
 	Control.SteerRad = FMath::Clamp(Control.SteerRad, -SteerLimit, SteerLimit);
 }
 
@@ -1514,8 +1717,9 @@ void AZN6VehicleActor::DrawTelemetry() const
 
 	GEngine->AddOnScreenDebugMessage(
 		1, 0.0f, FColor::White,
-		FString::Printf(TEXT("%5.1f km/h   %5.0f rpm   %d速"),
-		                SpeedKmh, Rpm, Control.GearIndex + 1));
+		FString::Printf(TEXT("%5.1f km/h   %5.0f rpm   %s%s"),
+		                SpeedKmh, Rpm, *GearLabel(),
+		                bAnalogInput ? TEXT("   [アナログ]") : TEXT("")));
 	GEngine->AddOnScreenDebugMessage(
 		2, 0.0f, RearSlip > 0.20 ? FColor::Orange : FColor::Silver,
 		FString::Printf(TEXT("後輪すべり率 %.3f   車体すべり角 %+.1f deg   "

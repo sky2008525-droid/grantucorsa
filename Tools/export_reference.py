@@ -113,6 +113,19 @@ VEHICLE_SCENARIOS = [
     ("power_on_oversteer_2nd", 45.0 / 3.6, "2",
      {"throttle": 1.0, "brake": 0.0, "steer_rad": 0.08, "clutch": 1.0, "handbrake": 0.0},
      2400, VEHICLE_TIMESTEP_S),
+    # **ニュートラルで空吹かししながら惰行する。**
+    # 歯車が噛んでいないので、エンジンが吹け上がっても車は減速するだけ。
+    # 移植でここを取り違えると（比 0 で通してしまう等）、エンジン回転か
+    # 車速のどちらかが必ずずれる。
+    ("neutral_coast_blip", 60.0 / 3.6, "N",
+     {"throttle": 1.0, "brake": 0.0, "steer_rad": 0.0, "clutch": 1.0, "handbrake": 0.0},
+     2000, VEHICLE_TIMESTEP_S),
+    # **後退。** 比の符号を落とすと前へ進むので、vx の符号で必ず出る。
+    # 初速を負にしているのは、静止発進が陽解法の安定条件を外れるため
+    # （このファイル冒頭の accel シナリオと同じ理由）。
+    ("reverse_from_3mps", -3.0, "R",
+     {"throttle": 0.5, "brake": 0.0, "steer_rad": 0.0, "clutch": 1.0, "handbrake": 0.0},
+     2000, VEHICLE_TIMESTEP_S),
 ]
 
 WHEELS = ("FL", "FR", "RL", "RR")

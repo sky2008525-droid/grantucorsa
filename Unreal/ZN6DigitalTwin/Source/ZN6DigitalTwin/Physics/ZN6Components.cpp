@@ -114,6 +114,8 @@ namespace ZN6
 			}
 		}
 
+		if (!Data.GetValue(TEXT("transmission.gear_ratios.R"), TEXT("-"), ReverseRatio, OutError)) { return false; }
+
 		if (!Data.GetValue(TEXT("transmission.final_drive"), TEXT("-"), FinalDrive, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("transmission.drivetrain_efficiency"), TEXT("-"), Efficiency, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("engine.rotational_inertia"), TEXT("kg*m^2"), EngineInertiaKgm2, OutError)) { return false; }
@@ -159,6 +161,16 @@ namespace ZN6
 
 	double FDrivetrain::TotalRatio(int32 GearIndex) const
 	{
+		// **ニュートラルで 0 を返さない。** 0 を返すと「比が 0 の段」として
+		// 計算が通ってしまい、間違いが黙って進む。
+		checkf(GearIndex != GearNeutral,
+		       TEXT("ニュートラルには減速比が無い。呼ぶ側で分岐すること"));
+		if (GearIndex == GearReverse)
+		{
+			// 公表値は大きさ。リバースアイドラが1枚入るぶん出力の回転方向が
+			// 前進と逆になるので、負号はここで付ける。
+			return -ReverseRatio * FinalDrive;
+		}
 		check(GearIndex >= 0 && GearIndex < ForwardGearCount);
 		return GearRatios[GearIndex] * FinalDrive;
 	}

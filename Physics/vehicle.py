@@ -580,9 +580,13 @@ class Vehicle:
 
     def initial_state(self, speed_mps: float = 0.0, gear: str = "1") -> VehicleState:
         omega = speed_mps / self.wheel_radius_m
-        engine_omega = max(
-            self.drivetrain.engine_omega_rads(omega, gear), self.idle_omega_rads
-        )
+        if gear == NEUTRAL:
+            # 噛んでいないので車速からエンジン回転を決められない。アイドル。
+            engine_omega = self.idle_omega_rads
+        else:
+            engine_omega = max(
+                self.drivetrain.engine_omega_rads(omega, gear), self.idle_omega_rads
+            )
         return VehicleState(
             vx_mps=speed_mps,
             wheel_omega_rads={w: omega for w in WHEELS},

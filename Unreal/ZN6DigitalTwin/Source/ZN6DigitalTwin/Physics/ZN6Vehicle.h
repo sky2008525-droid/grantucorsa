@@ -53,6 +53,13 @@ namespace ZN6
 		double Throttle = 0.0;
 		double Brake = 0.0;
 		double SteerRad = 0.0;
+
+		/**
+		 * 入れている段。**0..5 が 1速..6速。**
+		 * `GearNeutral`(-1) と `GearReverse`(-2) は前進段の**外側**にある
+		 * （「6速の次」ではない）。Python 側の `ControlInput.gear` の
+		 * `"1"`-`"6"` / `"N"` / `"R"` に対応する。
+		 */
 		int32 GearIndex = 0;
 
 		/**

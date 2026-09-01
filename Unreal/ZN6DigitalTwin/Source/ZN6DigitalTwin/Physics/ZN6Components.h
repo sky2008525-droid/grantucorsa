@@ -22,6 +22,28 @@ namespace ZN6
 	extern const TCHAR* const ForwardGears[6];
 	inline constexpr int32 ForwardGearCount = 6;
 
+	/**
+	 * ニュートラル。**減速比を持たない。**
+	 *
+	 * Python 側は段を文字列（`"N"`）で持つ。C++ は添字なので、
+	 * 前進 6 段（0..5）の**外側**に負の番号を割り当てる。
+	 * 「6速の次」ではないので連番の端には置かない。
+	 */
+	inline constexpr int32 GearNeutral = -1;
+
+	/**
+	 * 後退。公表比 3.437 は**大きさ**で、向きはリバースアイドラが決める。
+	 * 符号は `FDrivetrain::TotalRatio` が付ける（vehicle.json は触らない）。
+	 */
+	inline constexpr int32 GearReverse = -2;
+
+	/** 運転者が選べる段か。**H パターンシフターが送ってくるのはこの集合。** */
+	inline bool IsSelectableGear(int32 GearIndex)
+	{
+		return (GearIndex >= 0 && GearIndex < ForwardGearCount)
+			|| GearIndex == GearNeutral || GearIndex == GearReverse;
+	}
+
 	// -----------------------------------------------------------------------
 	// エンジン（FA20）
 	// -----------------------------------------------------------------------
@@ -75,7 +97,13 @@ namespace ZN6
 	public:
 		bool Init(FVehicleData& Data, FString& OutError);
 
-		/** エンジン回転 / 車輪回転 の総減速比。 */
+		/**
+		 * エンジン回転 / 車輪回転 の総減速比。
+		 *
+		 * 後退では**負**を返す（エンジンが正転しても車輪は逆へ回る）。
+		 * **ニュートラルで呼んではいけない**（比が存在しない）。呼ぶ側が
+		 * 「ニュートラルでは駆動系を通らない」と書き分けること。
+		 */
 		double TotalRatio(int32 GearIndex) const;
 
 		double EngineOmegaRads(double WheelOmegaRads, int32 GearIndex) const;
@@ -108,6 +136,9 @@ namespace ZN6
 		bool CheckFinalDriveVariant(FVehicleData& Data, FString& OutError) const;
 
 		double GearRatios[ForwardGearCount] = {};
+
+		/** 後退の比の**大きさ**。符号は TotalRatio が付ける。 */
+		double ReverseRatio = 0.0;
 		double FinalDrive = 0.0;
 		double Efficiency = 0.0;
 		double EngineInertiaKgm2 = 0.0;

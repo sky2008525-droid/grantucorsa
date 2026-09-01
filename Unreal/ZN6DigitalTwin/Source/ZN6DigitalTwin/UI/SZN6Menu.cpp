@@ -211,12 +211,29 @@ FReply SZN6Menu::OnKeyDown(const FGeometry& Geometry, const FKeyEvent& Key)
 
 	const FKey Pressed = Key.GetKey();
 
-	if (Pressed == EKeys::Up || Pressed == EKeys::W)          { MoveSelection(-1); }
-	else if (Pressed == EKeys::Down || Pressed == EKeys::S)   { MoveSelection(1); }
-	else if (Pressed == EKeys::Left || Pressed == EKeys::A)   { Adjust(-1); }
-	else if (Pressed == EKeys::Right || Pressed == EKeys::D)  { Adjust(1); }
-	else if (Pressed == EKeys::Enter || Pressed == EKeys::SpaceBar) { Activate(); }
-	else if (Pressed == EKeys::Escape || Pressed == EKeys::BackSpace) { GoBack(); }
+	// **パッドで開いたらパッドで閉じられること。**
+	//
+	// キーボードのキーしか見ていなかった間は、パッドにメニューを
+	// 割り当てた瞬間に「開いたら二度と閉じられない」画面ができていた。
+	// 入力モードが UIOnly になるので、車の操作にも戻れない。
+	// 十字キーとスティック（Gamepad_Left*）の両方を受ける。
+	if (Pressed == EKeys::Up || Pressed == EKeys::W
+	    || Pressed == EKeys::Gamepad_DPad_Up
+	    || Pressed == EKeys::Gamepad_LeftStick_Up)               { MoveSelection(-1); }
+	else if (Pressed == EKeys::Down || Pressed == EKeys::S
+	         || Pressed == EKeys::Gamepad_DPad_Down
+	         || Pressed == EKeys::Gamepad_LeftStick_Down)        { MoveSelection(1); }
+	else if (Pressed == EKeys::Left || Pressed == EKeys::A
+	         || Pressed == EKeys::Gamepad_DPad_Left
+	         || Pressed == EKeys::Gamepad_LeftStick_Left)        { Adjust(-1); }
+	else if (Pressed == EKeys::Right || Pressed == EKeys::D
+	         || Pressed == EKeys::Gamepad_DPad_Right
+	         || Pressed == EKeys::Gamepad_LeftStick_Right)       { Adjust(1); }
+	else if (Pressed == EKeys::Enter || Pressed == EKeys::SpaceBar
+	         || Pressed == EKeys::Gamepad_FaceButton_Bottom)     { Activate(); }
+	else if (Pressed == EKeys::Escape || Pressed == EKeys::BackSpace
+	         || Pressed == EKeys::Gamepad_FaceButton_Right
+	         || Pressed == EKeys::Gamepad_Special_Right)         { GoBack(); }
 	else
 	{
 		return FReply::Unhandled();
