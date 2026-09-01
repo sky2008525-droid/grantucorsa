@@ -371,6 +371,116 @@ def plan_trees(points, width_m, offsets, species_list):
     return placements
 
 
+#: コース周りに置くもの。**自分でモデリングせず、CC0 のアセットを使う。**
+#:
+#: (種類, 中心線からの距離 [m], 間隔 [m], 尺度の範囲, 置き方)
+#:
+#: 置き方:
+#:   "both"    左右どちらにも
+#:   "outside" **コーナーの外側だけ。** バリアやタイヤバリアはここ
+#:   "left" / "right"
+#:
+#: **距離は路肩より外にする。** 物理の当たり判定は樹木と世界境界しか
+#: 持たないので、路面のすぐ脇に置くとすり抜ける絵が出る。
+PROP_PLAN = [
+    # 種類, 距離, 間隔, 尺度, 置き方
+    ("concrete_road_barrier",          11.0,  4.2, (1.0, 1.0), "outside"),
+    ("concrete_road_barrier_02",       11.0,  4.2, (1.0, 1.0), "outside"),
+    ("old_tyre",                        9.5,  1.1, (1.0, 1.0), "tyre_wall"),
+    ("modular_chainlink_fence",        26.0,  4.0, (1.0, 1.0), "both"),
+    ("street_lamp_01",                 20.0, 46.0, (1.0, 1.0), "left"),
+    ("modular_electricity_poles",      34.0, 62.0, (1.0, 1.0), "right"),
+    ("modular_urban_apartments_facade", 78.0, 90.0, (1.0, 1.0), "both"),
+    ("rollershutter_door",             30.0,190.0, (1.0, 1.0), "left"),
+    ("Barrel_01",                      16.0, 75.0, (1.0, 1.0), "both"),
+    ("barrel_03",                      17.5, 88.0, (1.0, 1.0), "both"),
+    ("plastic_crate_02",               15.0,110.0, (1.0, 1.0), "left"),
+    ("boulder_01",                     44.0, 55.0, (0.6, 1.3), "both"),
+    ("rock_07",                        38.0, 33.0, (0.5, 1.1), "both"),
+]
+
+#: タイヤバリアを置く曲率のしきい値 [1/m]。これより曲がっている所だけ。
+#: **直線に積んでも意味がない。** 飛び出すのはコーナーの外側。
+TYRE_WALL_CURVATURE = 1.0 / 60.0
+
+
+def plan_props(points, width_m, species_list):
+    """コース周りの物を置く。
+
+    **樹木と同じ規則を守る。** 路面から離し、他区間の路面に近すぎたら
+    置かない（ヘアピンやS字では中心線が折り返すので、自分の断面から
+    離れていても別区間の路面上ということが起こる）。
+    """
+    rng = random.Random(RANDOM_SEED + 77)
+    samples = centreline_sampler(points, 5)
+    spacing = points[1]["s_m"] - points[0]["s_m"]
+    half = width_m / 2.0
+
+    placements = []
+    for kind, offset_m, gap_m, scale_range, mode in PROP_PLAN:
+        if kind not in species_list:
+            # **黙って飛ばさない**（憲法ルール6）。取り込み忘れに気づけない。
+            log("!! アセットが無いので置けない: %s", kind)
+            continue
+
+        step = max(int(gap_m / spacing), 1)
+        for index in range(0, len(points), step):
+            p = points[index]
+            heading = p["heading_rad"]
+            nx = -math.sin(heading)
+            ny = math.cos(heading)
+            curvature = p["curvature_1pm"]
+
+            if mode == "outside":
+                # 曲率が正（左旋回）なら外側は右。直線には置かない。
+                if abs(curvature) < 1.0 / 200.0:
+                    continue
+                sides = [-1.0 if curvature > 0.0 else 1.0]
+            elif mode == "tyre_wall":
+                if abs(curvature) < TYRE_WALL_CURVATURE:
+                    continue
+                sides = [-1.0 if curvature > 0.0 else 1.0]
+            elif mode == "left":
+                sides = [1.0]
+            elif mode == "right":
+                sides = [-1.0]
+            else:
+                sides = [1.0, -1.0]
+
+            for side in sides:
+                distance = offset_m
+                if mode == "tyre_wall":
+                    # タイヤは2段に積む。**1個だけだとゴミに見える。**
+                    stacks = [(distance, 0.0), (distance + 0.62, 0.0),
+                              (distance + 0.31, 0.30)]
+                else:
+                    stacks = [(distance, 0.0)]
+
+                for lateral, height in stacks:
+                    x = p["x_m"] + nx * lateral * side
+                    y = p["y_m"] + ny * lateral * side
+
+                    if distance_to_centreline(x, y, samples) < half + 2.5:
+                        continue
+
+                    # 向き。バリアとフェンスはコースに沿わせる。
+                    if mode in ("outside", "tyre_wall") or kind.startswith("modular_chainlink"):
+                        yaw = heading
+                    else:
+                        yaw = rng.uniform(0.0, 2.0 * math.pi)
+
+                    low, high = scale_range
+                    placements.append({
+                        "kind": kind,
+                        "x_m": x,
+                        "y_m": y,
+                        "z_m": height,
+                        "yaw_rad": yaw,
+                        "scale": rng.uniform(low, high),
+                    })
+    return placements
+
+
 def export_fbx(objects, path):
     bpy.ops.object.select_all(action="DESELECT")
     for obj in objects:
@@ -467,6 +577,16 @@ def main():
     trees = plan_trees(points, width_m, track["tree_offset_m"], species)
     log("trees: %d 本", len(trees))
 
+    # **コース周りの物。** 自分でモデリングせず CC0 のアセットを置く。
+    prop_kinds = [entry[0] for entry in PROP_PLAN]
+    props = plan_props(points, width_m, prop_kinds)
+    prop_counts = {}
+    for prop in props:
+        prop_counts[prop["kind"]] = prop_counts.get(prop["kind"], 0) + 1
+    log("props: %d 個", len(props))
+    for name, count in sorted(prop_counts.items()):
+        log("   %-34s %d", name, count)
+
     counts = {}
     for tree in trees:
         counts[tree["species"]] = counts.get(tree["species"], 0) + 1
@@ -489,6 +609,8 @@ def main():
         "ground_fbx": "TrackGround.fbx",
         "species": species,
         "trees": trees,
+        "prop_kinds": sorted({prop["kind"] for prop in props}),
+        "props": props,
     }
     with open(os.path.join(out_dir, "placement.json"), "w", encoding="utf-8") as handle:
         json.dump(placement, handle, ensure_ascii=False, indent=1)

@@ -440,6 +440,53 @@ def place_trees(root):
     return count
 
 
+def place_props(root):
+    """コース周りの物（バリア・タイヤ・フェンス・街灯・建物など）を置く。
+
+    **樹木と同じ仕組みで置く。** どちらも `/Game/ZN6/Foliage/<kind>/` に
+    取り込まれた CC0 のモデルで、配置は `placement.json` が決めている。
+
+    **数が多い**（1コースで 2000 個超）。Nanite が効いているので描画は
+    持つが、Actor が増えるとレベルの読み込みが遅くなる。
+    減らしたいときは `Blender/build_track.py` の `PROP_PLAN` の間隔を
+    広げること。**ここで間引かない**（配置の決定は1箇所に置く）。
+    """
+    with open(os.path.join(root, "Tracks", "Export", TRACK_KEY, "placement.json"),
+              encoding="utf-8") as handle:
+        placement = json.load(handle)
+
+    props = placement.get("props", [])
+    if not props:
+        log("props: 配置データが無い（build_track.py が古い可能性）")
+        return 0
+
+    meshes = tree_meshes()          # Foliage 以下を全部拾うので props も入る
+    missing = set()
+    count = 0
+    for index, prop in enumerate(props):
+        mesh = meshes.get(prop["kind"])
+        if mesh is None:
+            missing.add(prop["kind"])
+            continue
+        actor = spawn_mesh(
+            mesh,
+            to_ue_location(prop["x_m"], prop["y_m"], prop["z_m"]),
+            to_ue_yaw(prop["yaw_rad"]),
+            "Prop_%s_%04d" % (prop["kind"], index))
+        if actor is None:
+            continue
+        scale = prop["scale"]
+        actor.set_actor_scale3d(unreal.Vector(scale, scale, scale))
+        count += 1
+
+    if missing:
+        # **黙って減らさない。** 取り込み忘れに気づけなくなる。
+        unreal.log_error("[ZN6 level] メッシュが見つからない: %s"
+                         % ", ".join(sorted(missing)))
+    log("props %d / %d 個を配置" % (count, len(props)))
+    return count
+
+
 def place_lighting():
     """空と光。
 
@@ -597,6 +644,7 @@ def main():
     road_material, ground_material = build_track_materials()
     place_track(road_material, ground_material)
     place_trees(root)
+    place_props(root)
     place_lighting()
     place_vehicle(root)
 

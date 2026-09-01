@@ -109,5 +109,175 @@
       "Rough": "aerial_grass_rock_rough_2k.jpg"
     },
     "bytes": 8864805
+  },
+  "concrete_road_barrier": {
+    "name": "Concrete Road Barrier",
+    "authors": {
+      "Amal Kumar": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/concrete_road_barrier",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 80776,
+    "gltf": "concrete_road_barrier_1k.gltf",
+    "bytes": 3750787
+  },
+  "concrete_road_barrier_02": {
+    "name": "Concrete Road Barrier 02",
+    "authors": {
+      "Amal Kumar": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/concrete_road_barrier_02",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 42578,
+    "gltf": "concrete_road_barrier_02_1k.gltf",
+    "bytes": 2928100
+  },
+  "old_tyre": {
+    "name": "Old Tyre",
+    "authors": {
+      "MP": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/old_tyre",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 2880,
+    "gltf": "old_tyre_1k.gltf",
+    "bytes": 2237203
+  },
+  "modular_chainlink_fence": {
+    "name": "Modular Chainlink Fence",
+    "authors": {
+      "James Ray Cock": "All",
+      "Amal Kumar": "Fence Wire Material"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/modular_chainlink_fence",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 89232,
+    "gltf": "modular_chainlink_fence_1k.gltf",
+    "bytes": 7292015
+  },
+  "street_lamp_01": {
+    "name": "Street Lamp 01",
+    "authors": {
+      "Josh Dean": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/street_lamp_01",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 30610,
+    "gltf": "street_lamp_01_1k.gltf",
+    "bytes": 2166163
+  },
+  "modular_electricity_poles": {
+    "name": "Modular Electricity Poles",
+    "authors": {
+      "James Ray Cock": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/modular_electricity_poles",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 200610,
+    "gltf": "modular_electricity_poles_1k.gltf",
+    "bytes": 12423631
+  },
+  "modular_urban_apartments_facade": {
+    "name": "Modular Urban Apartments Facade",
+    "authors": {
+      "James Ray Cock": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/modular_urban_apartments_facade",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 118215,
+    "gltf": "modular_urban_apartments_facade_1k.gltf",
+    "bytes": 16488693
+  },
+  "rollershutter_door": {
+    "name": "Rollershutter Door",
+    "authors": {
+      "MP": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/rollershutter_door",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 1104,
+    "gltf": "rollershutter_door_1k.gltf",
+    "bytes": 2342983
+  },
+  "Barrel_01": {
+    "name": "Barrel_01",
+    "authors": {
+      "Jorge Camacho": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/Barrel_01",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 2682,
+    "gltf": "Barrel_01_1k.gltf",
+    "bytes": 692947
+  },
+  "barrel_03": {
+    "name": "Barrel 03",
+    "authors": {
+      "Serhii Khromov": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/barrel_03",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 1473,
+    "gltf": "barrel_03_1k.gltf",
+    "bytes": 574136
+  },
+  "plastic_crate_02": {
+    "name": "Plastic Crate 02",
+    "authors": {
+      "Fabi_G": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/plastic_crate_02",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 5840,
+    "gltf": "plastic_crate_02_1k.gltf",
+    "bytes": 1838779
+  },
+  "boulder_01": {
+    "name": "Boulder 01",
+    "authors": {
+      "Rico Cilliers": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/boulder_01",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 123976,
+    "gltf": "boulder_01_1k.gltf",
+    "bytes": 5771986
+  },
+  "rock_07": {
+    "name": "Rock 07",
+    "authors": {
+      "Jenelle van Heerden": "All"
+    },
+    "license": "CC0",
+    "source": "https://polyhaven.com/a/rock_07",
+    "kind": "models",
+    "resolution": "1k",
+    "polycount": 27830,
+    "gltf": "rock_07_1k.gltf",
+    "bytes": 2184088
   }
 }
