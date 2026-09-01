@@ -17,12 +17,14 @@
 
 #include "CoreMinimal.h"
 #include "Physics/ZN6Setup.h"
+#include "UI/ZN6Livery.h"
 #include "UI/ZN6HudSnapshot.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Widgets/SCompoundWidget.h"
 
 DECLARE_DELEGATE(FZN6MenuAction);
 DECLARE_DELEGATE_OneParam(FZN6SetupChanged, const ZN6::FCarSetup&);
+DECLARE_DELEGATE_OneParam(FZN6PaintChanged, int32);
 
 class SZN6Menu : public SCompoundWidget
 {
@@ -32,6 +34,7 @@ public:
 	{
 		Main,
 		Setup,
+		Livery,
 		Graphics,
 		Result,
 	};
@@ -42,6 +45,7 @@ public:
 		SLATE_EVENT(FZN6MenuAction, OnResume)
 		SLATE_EVENT(FZN6MenuAction, OnQuit)
 		SLATE_EVENT(FZN6SetupChanged, OnSetupChanged)
+		SLATE_EVENT(FZN6PaintChanged, OnPaintChanged)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -51,6 +55,9 @@ public:
 
 	/** 今のセッティングを反映する（外で変わったとき）。 */
 	void SetSetup(const ZN6::FCarSetup& InSetup) { Setup = InSetup; }
+
+	void SetPaintIndex(int32 Index) { PaintIndex = Index; }
+	int32 GetPaintIndex() const { return PaintIndex; }
 	const ZN6::FCarSetup& GetSetup() const { return Setup; }
 
 	/** リザルト表示に使う値。 */
@@ -93,6 +100,8 @@ private:
 	                 int32 Layer, const FVector2f& Origin, const FVector2f& Size) const;
 	int32 PaintGraphics(const FGeometry& Geometry, FSlateWindowElementList& Out,
 	                    int32 Layer, const FVector2f& Origin, const FVector2f& Size) const;
+	int32 PaintLivery(const FGeometry& Geometry, FSlateWindowElementList& Out,
+	                  int32 Layer, const FVector2f& Origin, const FVector2f& Size) const;
 	int32 PaintResult(const FGeometry& Geometry, FSlateWindowElementList& Out,
 	                  int32 Layer, const FVector2f& Origin, const FVector2f& Size) const;
 	int32 PaintHint(const FGeometry& Geometry, FSlateWindowElementList& Out,
@@ -136,6 +145,10 @@ private:
 	FZN6MenuAction OnResume;
 	FZN6MenuAction OnQuit;
 	FZN6SetupChanged OnSetupChanged;
+	FZN6PaintChanged OnPaintChanged;
+
+	/** 選んでいるボディカラー。**演出であって車両仕様ではない。** */
+	int32 PaintIndex = 0;
 
 	const FSlateBrush* WhiteBrush = nullptr;
 

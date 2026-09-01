@@ -47,6 +47,7 @@ namespace
 		{ TEXT("RACE"),      TEXT("カウントダウンから 3 周") },
 		{ TEXT("FREE RUN"),  TEXT("待たずに走る。周回数は無制限") },
 		{ TEXT("CAR SETUP"), TEXT("車高・アライメント・ばね・ブレーキ") },
+		{ TEXT("BODY COLOUR"), TEXT("ボディカラー（演出。純正色ではない）") },
 		{ TEXT("GRAPHICS"),  TEXT("画質と表示") },
 		{ TEXT("QUIT"),      TEXT("終了") },
 	};
@@ -60,6 +61,7 @@ void SZN6Menu::Construct(const FArguments& InArgs)
 	OnResume = InArgs._OnResume;
 	OnQuit = InArgs._OnQuit;
 	OnSetupChanged = InArgs._OnSetupChanged;
+	OnPaintChanged = InArgs._OnPaintChanged;
 
 	WhiteBrush = FCoreStyle::Get().GetBrush("WhiteBrush");
 	SetCanTick(false);
@@ -87,6 +89,7 @@ int32 SZN6Menu::RowCount() const
 	{
 	case EPage::Main:     return MainEntryCount;
 	case EPage::Setup:    return static_cast<int32>(ZN6::ESetupItem::Count);
+	case EPage::Livery:   return ZN6::PaintPalette().Num();
 	case EPage::Graphics: return GraphicsRowCount();
 	default:              return 0;
 	}
@@ -111,6 +114,15 @@ void SZN6Menu::Adjust(int32 Direction)
 	if (Page == EPage::Graphics)
 	{
 		AdjustGraphics(Selected, Direction);
+		return;
+	}
+
+	if (Page == EPage::Livery)
+	{
+		PaintIndex = ((Selected + Direction) % ZN6::PaintPalette().Num()
+		              + ZN6::PaintPalette().Num()) % ZN6::PaintPalette().Num();
+		Selected = PaintIndex;
+		OnPaintChanged.ExecuteIfBound(PaintIndex);
 		return;
 	}
 
@@ -149,10 +161,20 @@ void SZN6Menu::Activate()
 		case 0: Close(); OnStartRace.ExecuteIfBound(); break;
 		case 1: Close(); OnFreeRun.ExecuteIfBound(); break;
 		case 2: Open(EPage::Setup); break;
-		case 3: Open(EPage::Graphics); break;
-		case 4: OnQuit.ExecuteIfBound(); break;
+		case 3: Open(EPage::Livery); break;
+		case 4: Open(EPage::Graphics); break;
+		case 5: OnQuit.ExecuteIfBound(); break;
 		default: break;
 		}
+		return;
+	}
+
+	if (Page == EPage::Livery)
+	{
+		// **選んだ瞬間に反映する。** 「適用」を押すまで変わらないと、
+		// 何を選んでいるのか分からない。
+		PaintIndex = Selected;
+		OnPaintChanged.ExecuteIfBound(PaintIndex);
 		return;
 	}
 
@@ -600,6 +622,65 @@ int32 SZN6Menu::PaintSetup(const FGeometry& Geometry, FSlateWindowElementList& O
 	return Layer + 1;
 }
 
+int32 SZN6Menu::PaintLivery(const FGeometry& Geometry, FSlateWindowElementList& Out,
+                            int32 Layer, const FVector2f& Origin,
+                            const FVector2f& Size) const
+{
+	const TArrayView<const ZN6::FPaintColour> Palette = ZN6::PaintPalette();
+	float Y = Origin.Y;
+
+	for (int32 Index = 0; Index < Palette.Num(); ++Index)
+	{
+		const bool bSelected = (Index == Selected);
+		const bool bApplied = (Index == PaintIndex);
+
+		RowRects.Add(FSlateRect(Origin.X - 14.0f, Y - 6.0f, Origin.X + 420.0f, Y + 34.0f));
+		LeftArrowRects.Add(FSlateRect());
+		RightArrowRects.Add(FSlateRect());
+
+		// **色そのものを大きく出す。** 名前だけでは何色か分からない。
+		Box(Out, Layer, Geometry, WhiteBrush, FVector2f(Origin.X, Y - 2.0f),
+		    FVector2f(54.0f, 28.0f), Palette[Index].Colour);
+		// 枠。**暗い色は背景に溶ける。**
+		Line(Out, Layer + 1, Geometry, FVector2f(Origin.X, Y - 2.0f),
+		     FVector2f(Origin.X + 54.0f, Y - 2.0f), PanelEdge(), 1.0f);
+		Line(Out, Layer + 1, Geometry, FVector2f(Origin.X, Y + 26.0f),
+		     FVector2f(Origin.X + 54.0f, Y + 26.0f), PanelEdge(), 1.0f);
+
+		Text(Out, Layer + 1, Geometry, Palette[Index].Name,
+		     FVector2f(Origin.X + 70.0f, Y), LabelFont(15),
+		     bSelected ? TextPrimary() : TextSecondary());
+
+		if (bApplied)
+		{
+			Text(Out, Layer + 1, Geometry, TEXT("● 適用中"),
+			     FVector2f(Origin.X + 260.0f, Y), LabelFont(12), Accent());
+		}
+		if (bSelected)
+		{
+			Box(Out, Layer, Geometry, WhiteBrush,
+			    FVector2f(Origin.X - 14.0f, Y - 4.0f), FVector2f(4.0f, 32.0f), Accent());
+		}
+
+		Y += 40.0f;
+	}
+
+	// **出典が無いことを画面に書く。** 「純正色」だと誤解させない。
+	const float NoteX = Origin.X + 460.0f;
+	Text(Out, Layer, Geometry, TEXT("これは演出であって車両仕様ではない"),
+	     FVector2f(NoteX, Origin.Y), LabelFont(12), Warn());
+	Text(Out, Layer, Geometry, TEXT("ZN6 の純正色（コード・名称）の出典が"),
+	     FVector2f(NoteX, Origin.Y + 20.0f), LabelFont(12), TextSecondary());
+	Text(Out, Layer, Geometry, TEXT("取れていないので、純正色を名乗らない。"),
+	     FVector2f(NoteX, Origin.Y + 38.0f), LabelFont(12), TextSecondary());
+	Text(Out, Layer, Geometry, TEXT("塗るのは元モデルの塗装スロットだけで、"),
+	     FVector2f(NoteX, Origin.Y + 64.0f), LabelFont(12), TextSecondary());
+	Text(Out, Layer, Geometry, TEXT("ガラス・灯火・クロームは変えない。"),
+	     FVector2f(NoteX, Origin.Y + 82.0f), LabelFont(12), TextSecondary());
+
+	return Layer + 2;
+}
+
 int32 SZN6Menu::PaintGraphics(const FGeometry& Geometry, FSlateWindowElementList& Out,
                               int32 Layer, const FVector2f& Origin,
                               const FVector2f& Size) const
@@ -748,6 +829,11 @@ int32 SZN6Menu::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometr
 		Hint = TEXT("↑↓ で項目    ←→ で増減    Esc で戻る"
 		            "    ／ 帯の左半分・右半分をクリックしても増減できる"
 		            "    （変更はすぐ車に反映される）");
+		break;
+	case EPage::Livery:
+		Layer = PaintLivery(AllottedGeometry, OutDrawElements, Layer + 1, Origin, Size);
+		Hint = TEXT("↑↓ で色を選ぶ    Enter または ←→ で適用    Esc で戻る"
+		            "    ／ クリックでも選べる");
 		break;
 	case EPage::Graphics:
 		Layer = PaintGraphics(AllottedGeometry, OutDrawElements, Layer + 1, Origin, Size);

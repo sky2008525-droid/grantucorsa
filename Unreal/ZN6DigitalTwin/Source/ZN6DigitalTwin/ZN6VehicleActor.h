@@ -19,6 +19,7 @@
 #include "Audio/ZN6VehicleAudioComponent.h"
 #include "Game/ZN6RaceDirector.h"
 #include "UI/ZN6HudSnapshot.h"
+#include "UI/ZN6Livery.h"
 #include "Physics/ZN6Obstacles.h"
 #include "Physics/ZN6Ride.h"
 #include "Physics/ZN6Track.h"
@@ -285,6 +286,17 @@ public:
 	/** メニューを開く / 閉じる。 */
 	UFUNCTION(BlueprintCallable, Category = "ZN6|UI")
 	void ToggleMenu();
+
+	/**
+	 * ボディカラーを変える。**演出であって車両仕様ではない**（ルール18）。
+	 *
+	 * 塗るスロットは、元モデルの塗装色と一致するものだけ
+	 * （`ZN6::IsPaintSlot`）。ガラスや灯火まで塗ると単色の塊になる。
+	 */
+	void SetBodyColour(const FLinearColor& Colour);
+
+	int32 GetPaintIndex() const { return PaintIndex; }
+	void SetPaintIndex(int32 Index);
 
 	/** 車体が乗っている地面の高さ [m]（4輪の接地点の平均）。 */
 	double GetGroundHeightM() const { return GroundHeightM; }
@@ -554,6 +566,17 @@ private:
 	float AutoShotDelayS = -1.0f;
 	float AutoShotElapsedS = 0.0f;
 	bool bAutoShotTaken = false;
+
+	/**
+	 * 塗装スロットの動的マテリアル。**車体の色を変えるのに使う。**
+	 * 元モデルの塗装色と一致したスロットだけがここに入る。
+	 */
+	UPROPERTY(Transient)
+	TArray<UMaterialInstanceDynamic*> PaintMaterials;
+	int32 PaintIndex = 0;
+
+	/** 塗装スロットを探して動的マテリアルを作る。**1回だけ。** */
+	void PreparePaintMaterials();
 
 	/** 今のセッティングと、その調整範囲。 */
 	ZN6::FCarSetup Setup;

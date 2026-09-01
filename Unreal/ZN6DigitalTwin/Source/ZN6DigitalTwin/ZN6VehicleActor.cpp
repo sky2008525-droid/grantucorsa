@@ -11,6 +11,7 @@
 #include "Engine/GameViewportClient.h"
 #include "Physics/ZN6Units.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "UnrealClient.h"
@@ -176,6 +177,9 @@ void AZN6VehicleActor::BeginPlay()
 	// 地形を読んだ後でないと、平地の姿勢のまま坂に置かれて跳ねる。
 	SettleRide();
 
+	// 塗装スロットを探しておく。**色を変えるより前に。**
+	PreparePaintMaterials();
+
 	CreateHud();
 }
 
@@ -244,6 +248,10 @@ void AZN6VehicleActor::CreateHud()
 		.OnSetupChanged_Lambda([this](const ZN6::FCarSetup& NewSetup)
 		{
 			ApplySetup(NewSetup);
+		})
+		.OnPaintChanged_Lambda([this](int32 Index)
+		{
+			SetPaintIndex(Index);
 		});
 
 	if (bSetupLimitsReady)
@@ -251,9 +259,21 @@ void AZN6VehicleActor::CreateHud()
 		Menu->SetLimits(SetupLimits);
 	}
 	Menu->SetSetup(Setup);
+	Menu->SetPaintIndex(PaintIndex);
 
 	GEngine->GameViewport->AddViewportWidgetContent(
 		SNew(SWeakWidget).PossiblyNullContent(Menu.ToSharedRef()), /*ZOrder=*/20);
+
+	// --- 確認用の起動オプション ---
+	//
+	// **画面を人手なしで撮れるようにしておく。** これが無いと、
+	// 「メニューの奥の画面」を誰も見ないまま完成と呼ぶことになる。
+	int32 StartPaint = 0;
+	if (FParse::Value(FCommandLine::Get(), TEXT("ZN6Paint="), StartPaint))
+	{
+		SetPaintIndex(StartPaint);
+		Menu->SetPaintIndex(PaintIndex);
+	}
 
 	// **最初はメニューから始める。** いきなり走り出さない。
 	//
@@ -262,7 +282,10 @@ void AZN6VehicleActor::CreateHud()
 	// GetController() が null を返す。**その場合フォーカスが渡らず、
 	// メニューが操作できないまま起動する。**
 	// 最初の Tick で追いつかせる（bInputModeDirty）。
-	Menu->Open(SZN6Menu::EPage::Main);
+	int32 StartPage = 0;
+	FParse::Value(FCommandLine::Get(), TEXT("ZN6MenuPage="), StartPage);
+	Menu->Open(static_cast<SZN6Menu::EPage>(
+		FMath::Clamp(StartPage, 0, static_cast<int32>(SZN6Menu::EPage::Result))));
 	bInputModeDirty = true;
 }
 
@@ -370,6 +393,81 @@ void AZN6VehicleActor::TickAutoScreenshot(float DeltaSeconds)
 			FPlatformMisc::RequestExit(false);
 		}
 	}, 2.0f, /*bLoop=*/false);
+}
+
+void AZN6VehicleActor::PreparePaintMaterials()
+{
+	if (PaintMaterials.Num() > 0 || BodyMesh == nullptr)
+	{
+		return;
+	}
+
+	const int32 SlotCount = BodyMesh->GetNumMaterials();
+	for (int32 Slot = 0; Slot < SlotCount; ++Slot)
+	{
+		UMaterialInterface* Source = BodyMesh->GetMaterial(Slot);
+		if (Source == nullptr)
+		{
+			continue;
+		}
+
+		// **今の色を見て、塗装かどうかを決める。**
+		// スロット番号を直接書くと、モデルを差し替えた瞬間に
+		// 「別の場所が塗られる」という気づきにくい壊れ方をする。
+		FLinearColor Base = FLinearColor::White;
+		if (!Source->GetVectorParameterValue(
+				FMaterialParameterInfo(TEXT("BaseColorFactor")), Base))
+		{
+			continue;
+		}
+		if (!ZN6::IsPaintSlot(Base))
+		{
+			continue;
+		}
+
+		if (UMaterialInstanceDynamic* Dynamic =
+				BodyMesh->CreateAndSetMaterialInstanceDynamicFromMaterial(Slot, Source))
+		{
+			PaintMaterials.Add(Dynamic);
+		}
+	}
+
+	if (PaintMaterials.Num() == 0)
+	{
+		// **黙って何もしない、で終わらせない**（憲法ルール6）。
+		// 塗る場所が分からない状態を、成功として通さない。
+		UE_LOG(LogTemp, Warning,
+		       TEXT("ZN6: 塗装スロットが見つからない（%d スロット中）。"
+		            "ボディカラーは変わらない。"), SlotCount);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Display, TEXT("ZN6: 塗装スロット %d 個"),
+		       PaintMaterials.Num());
+	}
+}
+
+void AZN6VehicleActor::SetBodyColour(const FLinearColor& Colour)
+{
+	PreparePaintMaterials();
+	for (UMaterialInstanceDynamic* Dynamic : PaintMaterials)
+	{
+		if (Dynamic != nullptr)
+		{
+			Dynamic->SetVectorParameterValue(TEXT("BaseColorFactor"), Colour);
+		}
+	}
+}
+
+void AZN6VehicleActor::SetPaintIndex(int32 Index)
+{
+	const TArrayView<const ZN6::FPaintColour> Palette = ZN6::PaintPalette();
+	if (Palette.Num() == 0)
+	{
+		return;
+	}
+	PaintIndex = ((Index % Palette.Num()) + Palette.Num()) % Palette.Num();
+	SetBodyColour(Palette[PaintIndex].Colour);
 }
 
 void AZN6VehicleActor::SyncInputModeToMenu()
