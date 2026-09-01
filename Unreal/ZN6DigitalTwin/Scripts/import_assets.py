@@ -112,6 +112,33 @@ def configure_textures():
     return changed
 
 
+def configure_generated_textures():
+    """生成テクスチャの色空間を直す。
+
+    **mask と rough は線形データ。** sRGB のまま読むと、白線の縁が
+    にじみ、ラフネスが全体に明るく出る（`configure_textures()` と同じ話）。
+    """
+    fixed = 0
+    for name in ("road_overlay_mask", "road_overlay_rough"):
+        path = "%s/%s" % (PKG_TEXTURE, name)
+        asset = unreal.EditorAssetLibrary.load_asset(path)
+        if asset is None:
+            unreal.log_error("[ZN6 import] %s が無い（色空間を直せない）" % path)
+            continue
+        asset.set_editor_property("srgb", False)
+        # **TC_MASKS を使わないこと。**
+        #
+        # マテリアル側は SAMPLERTYPE_LINEAR_GRAYSCALE で読む。TC_MASKS と
+        # 組み合わせるとサンプラ型が食い違い、**マテリアルがコンパイルに
+        # 失敗して路面がチェッカー模様になる**（実際にそうなった）。
+        # 既存のラフネス（configure_textures）と同じ TC_GRAYSCALE に揃える。
+        asset.set_editor_property(
+            "compression_settings", unreal.TextureCompressionSettings.TC_GRAYSCALE)
+        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        fixed += 1
+    log("生成テクスチャの色空間: %d 枚" % fixed)
+
+
 def enable_nanite_everywhere():
     """取り込んだ StaticMesh すべてで Nanite を有効にし、**データが出来たか確かめる。**
 
@@ -217,6 +244,33 @@ def import_track(root):
     return run_tasks(tasks)
 
 
+def import_generated_textures(root):
+    """`Tracks/road_texture.py` が描いた白線・ひび割れを取り込む。
+
+    **素材を探すのではなく自分で描いている。** 白線はコース幅に合って
+    いなければ意味が無く、汎用のテクスチャでは幅 12 m のどこに引くかを
+    決められない（`Tracks/road_texture.py` の冒頭）。
+    """
+    folder = os.path.join(root, "Tracks", "Export", "Textures")
+    if not os.path.isdir(folder):
+        # **黙って飛ばさない**（憲法ルール6）。無いなら理由が分かるように。
+        unreal.log_error(
+            "[ZN6 import] 生成テクスチャが無い: %s。"
+            "先に `python Tracks/road_texture.py` を走らせること。" % folder)
+        return []
+
+    tasks = []
+    for name in ("road_overlay_diff", "road_overlay_mask", "road_overlay_rough"):
+        path = os.path.join(folder, name + ".png")
+        if os.path.isfile(path):
+            tasks.append(build_task(path, PKG_TEXTURE))
+        else:
+            unreal.log_error("[ZN6 import] %s が無い" % path)
+
+    log("生成テクスチャ %d 枚を取り込む" % len(tasks))
+    return run_tasks(tasks)
+
+
 def import_polyhaven(root):
     base = os.path.join(root, "Tracks", "Assets", "polyhaven")
     with open(os.path.join(base, "manifest.json"), encoding="utf-8") as handle:
@@ -265,8 +319,10 @@ def main():
     imported += import_vehicle(root)
     imported += import_track(root)
     imported += import_polyhaven(root)
+    imported += import_generated_textures(root)
 
     configure_textures()
+    configure_generated_textures()
     enable_nanite_everywhere()
 
     log("取り込み完了: %d アセット" % len(imported))

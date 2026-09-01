@@ -95,6 +95,94 @@ def find_asset(folder, name_contains, cls):
     return None
 
 
+def make_road_material(name, diffuse, normal, rough,
+                       overlay_diff, overlay_mask, overlay_rough):
+    """アスファルトの上に白線・ひび割れ・補修跡を重ねたマテリアル。
+
+    **2 つの UV を使い分ける。**
+
+    | UV | 何に使うか | 作っている場所 |
+    |---|---|---|
+    | UV0 | アスファルト。**実寸でタイリング** | `build_track.py` |
+    | UV1 | 白線・ひび割れ。**U が 0..1 でコース幅** | 同上 |
+
+    白線は幅に対する比で位置を決めたいので実寸にできない。逆に
+    アスファルトを比で貼ると、幅 12 m に 1 枚が引き伸ばされて
+    **のっぺりした灰色の帯**になる（実際そうなっていた）。
+
+    合成は `lerp(アスファルト, 上書き, mask)`。**置き換えではなく混ぜる**
+    ので、白線の下にもアスファルトの粒が残る。
+    """
+    package = PKG_MATERIAL
+    unreal.EditorAssetLibrary.make_directory(package)
+
+    asset_path = "%s/%s" % (package, name)
+    if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+        unreal.EditorAssetLibrary.delete_asset(asset_path)
+
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    material = tools.create_asset(name, package, unreal.Material,
+                                  unreal.MaterialFactoryNew())
+    if material is None:
+        unreal.log_error("[ZN6 level] マテリアルを作れない: %s" % asset_path)
+        return None
+
+    lib = unreal.MaterialEditingLibrary
+
+    def coords(index, x, y):
+        node = lib.create_material_expression(
+            material, unreal.MaterialExpressionTextureCoordinate, x, y)
+        node.set_editor_property("coordinate_index", index)
+        return node
+
+    base_uv = coords(0, -1400, 0)
+    mark_uv = coords(1, -1400, 600)
+
+    def sample(texture, uv, x, y, sampler_type):
+        node = lib.create_material_expression(
+            material, unreal.MaterialExpressionTextureSample, x, y)
+        node.set_editor_property("texture", texture)
+        node.set_editor_property("sampler_type", sampler_type)
+        lib.connect_material_expressions(uv, "", node, "UVs")
+        return node
+
+    colour = unreal.MaterialSamplerType.SAMPLERTYPE_COLOR
+    linear = unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE
+
+    asphalt = sample(diffuse, base_uv, -1000, -400, colour)
+    over_c = sample(overlay_diff, mark_uv, -1000, 200, colour)
+    mask = sample(overlay_mask, mark_uv, -1000, 600, linear)
+
+    # **mask で混ぜる。** 上書きするとアスファルトの粒が消える。
+    blend = lib.create_material_expression(
+        material, unreal.MaterialExpressionLinearInterpolate, -600, 0)
+    lib.connect_material_expressions(asphalt, "", blend, "A")
+    lib.connect_material_expressions(over_c, "", blend, "B")
+    lib.connect_material_expressions(mask, "", blend, "Alpha")
+    lib.connect_material_property(blend, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    if normal is not None:
+        node = sample(normal, base_uv, -1000, -100,
+                      unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL)
+        lib.connect_material_property(node, "", unreal.MaterialProperty.MP_NORMAL)
+
+    if rough is not None:
+        base_r = sample(rough, base_uv, -1000, 900, linear)
+        over_r = sample(overlay_rough, mark_uv, -1000, 1200, linear)
+        blend_r = lib.create_material_expression(
+            material, unreal.MaterialExpressionLinearInterpolate, -600, 1000)
+        lib.connect_material_expressions(base_r, "", blend_r, "A")
+        lib.connect_material_expressions(over_r, "", blend_r, "B")
+        lib.connect_material_expressions(mask, "", blend_r, "Alpha")
+        lib.connect_material_property(blend_r, "",
+                                      unreal.MaterialProperty.MP_ROUGHNESS)
+
+    lib.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(material.get_path_name(),
+                                         only_if_is_dirty=False)
+    return material
+
+
 def make_surface_material(name, diffuse, normal, rough, uv_scale):
     """テクスチャ3枚から不透明マテリアルを1つ作る。
 
@@ -160,12 +248,29 @@ def build_track_materials():
     def texture(name):
         return find_asset(PKG_TEXTURE, name, unreal.Texture2D)
 
-    road = make_surface_material(
-        "M_TrackRoad",
-        texture("asphalt_pit_lane_diff"),
-        texture("asphalt_pit_lane_nor_gl"),
-        texture("asphalt_pit_lane_rough"),
-        uv_scale=1.0)
+    overlay_diff = texture("road_overlay_diff")
+    overlay_mask = texture("road_overlay_mask")
+    overlay_rough = texture("road_overlay_rough")
+
+    if overlay_diff is None or overlay_mask is None:
+        # **黙ってアスファルトだけにしない**（憲法ルール6）。
+        # 白線が消えていることに気づけなくなる。
+        unreal.log_error(
+            "[ZN6 level] 白線のテクスチャが無い。"
+            "`python Tracks/road_texture.py` と import_assets.py を先に走らせること。")
+        road = make_surface_material(
+            "M_TrackRoad",
+            texture("asphalt_pit_lane_diff"),
+            texture("asphalt_pit_lane_nor_gl"),
+            texture("asphalt_pit_lane_rough"),
+            uv_scale=1.0)
+    else:
+        road = make_road_material(
+            "M_TrackRoad",
+            texture("asphalt_pit_lane_diff"),
+            texture("asphalt_pit_lane_nor_gl"),
+            texture("asphalt_pit_lane_rough"),
+            overlay_diff, overlay_mask, overlay_rough)
     ground = make_surface_material(
         "M_TrackGround",
         texture("aerial_grass_rock_diff"),

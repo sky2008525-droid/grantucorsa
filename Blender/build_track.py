@@ -73,6 +73,12 @@ GROUND_SINK_M = 0.05
 #: 5cm だが、切り口があるだけで印象が変わる。
 ROAD_THICKNESS_M = 0.14
 
+#: 白線・ひび割れのテクスチャ1枚が進行方向に何メートル分か。
+#:
+#: **`Tracks/road_texture.py` の TILE_LENGTH_M と一致させること。**
+#: ずれると破線の間隔が設計と変わる。
+ROAD_MARKING_REPEAT_M = 24.0
+
 # 路面テクスチャの繰り返し間隔 [m]（UV の V 方向）
 ROAD_UV_REPEAT_M = 8.0
 
@@ -109,7 +115,16 @@ def build_road(points, width_m):
     half = width_m / 2.0
     mesh = bpy.data.meshes.new("TrackRoad")
     bm = bmesh.new()
+
+    # UV0: アスファルト。**実寸でタイリングする。**
+    #
+    # 以前は U を 0..1 にしていたので、1枚のアスファルトが幅 12 m 全体に
+    # 引き伸ばされ、**のっぺりした灰色の帯**になっていた。
     uv_layer = bm.loops.layers.uv.new("UVMap")
+
+    # UV1: 白線・ひび割れ。**U が 0..1 でコース幅**。
+    # 幅に対する比で位置を決めたいので、こちらは実寸にしない。
+    mark_layer = bm.loops.layers.uv.new("UVMap2")
 
     # 上面（走行面。**必ず z=0**）と、その真下の縁。
     rows = []
@@ -147,13 +162,18 @@ def build_road(points, width_m):
         except ValueError:
             continue                      # 同一面の重複。閉合部で起こりうる
 
+        mv_a = s_a / ROAD_MARKING_REPEAT_M
+        mv_b = s_b / ROAD_MARKING_REPEAT_M
+
         for loop in face.loops:
-            if loop.vert in (left_a, left_b):
-                u = 0.0
-            else:
-                u = 1.0
-            v = v_a if loop.vert in (left_a, right_a) else v_b
-            loop[uv_layer].uv = (u, v)
+            on_left = loop.vert in (left_a, left_b)
+            on_first = loop.vert in (left_a, right_a)
+            # アスファルトは実寸。幅方向も同じ間隔で繰り返す。
+            loop[uv_layer].uv = ((-half if on_left else half) / ROAD_UV_REPEAT_M,
+                                 v_a if on_first else v_b)
+            # 白線は幅に対する比。
+            loop[mark_layer].uv = (0.0 if on_left else 1.0,
+                                   mv_a if on_first else mv_b)
 
         # --- 側面（舗装の切り口）---
         #
@@ -169,10 +189,13 @@ def build_road(points, width_m):
             for loop in side.loops:
                 # 側面は縦に細長い。U を厚み方向、V を距離にする。
                 on_top = abs(loop.vert.co.z) < 1e-9
+                on_first = loop.vert in (left_a, right_a, left_low_a, right_low_a)
                 loop[uv_layer].uv = (
                     u_base + (0.0 if on_top else ROAD_THICKNESS_M / ROAD_UV_REPEAT_M),
-                    (v_a if loop.vert in (left_a, right_a, left_low_a, right_low_a)
-                     else v_b))
+                    v_a if on_first else v_b)
+                # **側面に白線を出さない。** U=0.5 はセンターラインの位置
+                # なので、そこへ置くと舗装の切り口に白い帯が走る。
+                loop[mark_layer].uv = (0.20, mv_a if on_first else mv_b)
 
     bm.normal_update()
     bm.to_mesh(mesh)
