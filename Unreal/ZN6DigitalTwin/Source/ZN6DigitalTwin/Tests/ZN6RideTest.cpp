@@ -420,4 +420,140 @@ bool FZN6RideLoadTransfer::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6RideDrivesTyreLoads,
+	"ZN6.Ride.接地力をタイヤへ渡すと浮いた輪が効かなくなる",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6RideDrivesTyreLoads::RunTest(const FString& Parameters)
+{
+	ZN6::FVehicleData Data;
+	ZN6::FRideModel Ride;
+	if (!MakeRide(*this, Data, Ride))
+	{
+		return false;
+	}
+
+	FString Error;
+	ZN6::FVehicle Vehicle;
+	if (!Vehicle.Init(Data, /*bUseLsd=*/true, Error))
+	{
+		AddError(FString::Printf(TEXT("物理モデルを初期化できない: %s"), *Error));
+		return false;
+	}
+
+	ZN6::FControlInput Control;
+	Control.GearIndex = 2;
+	Control.Throttle = 0.5;
+	Control.SteerRad = 0.05;
+	Control.Clutch = 1.0;
+
+	const int32 FL = static_cast<int32>(ZN6::EWheel::FL);
+	const int32 FR = static_cast<int32>(ZN6::EWheel::FR);
+
+	// --- 渡さなければ今までどおり ---
+	//
+	// **繋いだこと自体で検証済みの結果を動かさない。**
+	{
+		ZN6::FVehicleState A = Vehicle.InitialState(70.0 / 3.6, 2);
+		ZN6::FVehicleState B = A;
+		ZN6::FVehicleOutputs OutA;
+		ZN6::FVehicleOutputs OutB;
+
+		for (int32 Step = 0; Step < 200; ++Step)
+		{
+			ZN6::FVehicleState NextA;
+			Vehicle.Step(A, Control, 0.002, NextA, OutA);
+			A = NextA;
+		}
+		ZN6::FVehicle Second;
+		Second.Init(Data, /*bUseLsd=*/true, Error);
+		for (int32 Step = 0; Step < 200; ++Step)
+		{
+			ZN6::FVehicleState NextB;
+			Second.Step(B, Control, 0.002, NextB, OutB,
+			            0.0, 0.0, 1.0, /*ContactLoadsN=*/nullptr);
+			B = NextB;
+		}
+		TestEqual(TEXT("nullptr を渡しても結果が同じ（vx）"), B.VxMps, A.VxMps);
+		TestEqual(TEXT("nullptr を渡しても結果が同じ（ヨー）"),
+		          B.YawRateRads, A.YawRateRads);
+	}
+
+	// --- 浮いた輪はタイヤ力を出さない ---
+	//
+	// **これが今まで出来ていなかった。** 接地モデルが「地面を押していない」
+	// と言っているのに、タイヤは準静的な荷重で力を出し続けていた。
+	{
+		double Quasi[ZN6::WheelCount] = {};
+		Vehicle.WheelLoadsN(0.0, 0.0, Quasi);
+
+		double Lifted[ZN6::WheelCount] = {};
+		for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+		{
+			Lifted[Wheel] = Quasi[Wheel];
+		}
+		Lifted[FL] = 0.0;
+
+		ZN6::FVehicleState State = Vehicle.InitialState(60.0 / 3.6, 2);
+		ZN6::FVehicleState Next;
+		ZN6::FVehicleOutputs Outputs;
+		Vehicle.Step(State, Control, 0.002, Next, Outputs, 0.0, 0.0, 1.0, Lifted);
+
+		TestEqual(TEXT("浮いた輪の垂直荷重はゼロ"), Outputs.TireFzN[FL], 0.0);
+		TestEqual(TEXT("浮いた輪は前後力を出さない"), Outputs.TireFxN[FL], 0.0);
+		TestEqual(TEXT("浮いた輪は横力を出さない"), Outputs.TireFyN[FL], 0.0);
+		TestTrue(TEXT("接地している輪は力を出す"),
+		         FMath::Abs(Outputs.TireFyN[FR]) > 0.0);
+	}
+
+	// --- 4輪とも浮いたら曲がれない ---
+	{
+		double Airborne[ZN6::WheelCount] = { 0.0, 0.0, 0.0, 0.0 };
+		ZN6::FVehicleState State = Vehicle.InitialState(80.0 / 3.6, 3);
+		const double BeforeYaw = State.YawRateRads;
+
+		ZN6::FControlInput Turning = Control;
+		Turning.GearIndex = 3;
+		Turning.Throttle = 1.0;
+		Turning.SteerRad = 0.20;
+
+		ZN6::FVehicleOutputs Outputs;
+		for (int32 Step = 0; Step < 50; ++Step)
+		{
+			ZN6::FVehicleState Next;
+			Vehicle.Step(State, Turning, 0.002, Next, Outputs,
+			             0.0, 0.0, 1.0, Airborne);
+			State = Next;
+		}
+
+		for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+		{
+			TestEqual(TEXT("空中では前後力ゼロ"), Outputs.TireFxN[Wheel], 0.0);
+			TestEqual(TEXT("空中では横力ゼロ"), Outputs.TireFyN[Wheel], 0.0);
+		}
+		TestTrue(*FString::Printf(TEXT("空中ではヨーが増えない（%.9f）"),
+		                          State.YawRateRads - BeforeYaw),
+		         FMath::Abs(State.YawRateRads - BeforeYaw) < 1e-9);
+	}
+
+	// --- 負の荷重を通さない ---
+	{
+		double Negative[ZN6::WheelCount] = { -500.0, -500.0, -500.0, -500.0 };
+		ZN6::FVehicleState State = Vehicle.InitialState(50.0 / 3.6, 1);
+		ZN6::FVehicleState Next;
+		ZN6::FVehicleOutputs Outputs;
+		Vehicle.Step(State, Control, 0.002, Next, Outputs, 0.0, 0.0, 1.0, Negative);
+
+		for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+		{
+			TestEqual(TEXT("負の荷重は 0 に丸める"), Outputs.TireFzN[Wheel], 0.0);
+		}
+	}
+
+	return true;
+}
+
 #endif  // WITH_DEV_AUTOMATION_TESTS

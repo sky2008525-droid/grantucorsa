@@ -223,14 +223,28 @@ namespace ZN6
 
 	void FVehicle::Step(const FVehicleState& State, const FControlInput& Control, double DtS,
 	                    FVehicleState& OutState, FVehicleOutputs& OutOutputs,
-	                    double SlopeGxMps2, double SlopeGyMps2, double NormalScale)
+	                    double SlopeGxMps2, double SlopeGyMps2, double NormalScale,
+	                    const double* ContactLoadsN)
 	{
 		OutOutputs = FVehicleOutputs();
 
-		// --- 前ステップの加速度から荷重を決める（準静的）---
-		// 反復せず1ステップ遅らせる。dt が十分小さければ差は無視できる。
+		// --- 垂直荷重 ---
 		double Fz[WheelCount];
-		WheelLoadsN(LastAxMps2, LastAyMps2, Fz, NormalScale);
+		if (ContactLoadsN == nullptr)
+		{
+			// 前ステップの加速度から荷重を決める（準静的）。
+			// 反復せず1ステップ遅らせる。dt が十分小さければ差は無視できる。
+			WheelLoadsN(LastAxMps2, LastAyMps2, Fz, NormalScale);
+		}
+		else
+		{
+			// 接地モデルが解いた力を使う。**負を通さない**
+			// （地面は押せるが引けない）。
+			for (int32 Wheel = 0; Wheel < WheelCount; ++Wheel)
+			{
+				Fz[Wheel] = FMath::Max(ContactLoadsN[Wheel], 0.0);
+			}
+		}
 
 		// --- エンジンとクラッチ ---
 		const double RearOmegaMean =

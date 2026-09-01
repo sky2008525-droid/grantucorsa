@@ -139,10 +139,21 @@ namespace ZN6
 		 * 地形の値は ZN6Terrain が高さ場から求める。
 		 * **描画メッシュからは読まない**（憲法ルール4）。
 		 */
+		/**
+		 * @param ContactLoadsN  接地モデルが解いた垂直荷重 [N]（4輪）。
+		 *   nullptr なら準静的な式を使う（既定。**そのときの結果は
+		 *   今までと1ビットも変わらない**）。
+		 *
+		 *   渡すと、**浮いた車輪のグリップが消える。** これが無いと、
+		 *   接地モデルが「地面を押していない」と言っている輪でも
+		 *   タイヤは準静的な荷重（常に正）で力を出し続け、段差で跳ねても
+		 *   曲がれてしまう。
+		 */
 		void Step(const FVehicleState& State, const FControlInput& Control, double DtS,
 		          FVehicleState& OutState, FVehicleOutputs& OutOutputs,
 		          double SlopeGxMps2 = 0.0, double SlopeGyMps2 = 0.0,
-		          double NormalScale = 1.0);
+		          double NormalScale = 1.0,
+		          const double* ContactLoadsN = nullptr);
 
 		/**
 		 * 準静的な4輪の垂直荷重 [N]。FR なので加速で駆動輪（後輪）に乗る。

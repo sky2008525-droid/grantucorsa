@@ -395,6 +395,34 @@ void AZN6VehicleActor::TickAutoScreenshot(float DeltaSeconds)
 	}, 2.0f, /*bLoop=*/false);
 }
 
+void AZN6VehicleActor::TickAutoShift(float DeltaSeconds)
+{
+	SinceShiftS += DeltaSeconds;
+	if (!Assists.bAutoShift || !bPhysicsReady)
+	{
+		return;
+	}
+
+	// **間隔を空ける。** 空けないと境目で上下に振動して延々と変速し続ける。
+	if (SinceShiftS < Assists.ShiftIntervalS)
+	{
+		return;
+	}
+
+	const double Rpm = ZN6::RadsToRpm(PhysicsState.EngineOmegaRads);
+
+	if (Rpm > Assists.UpshiftRpm && Control.GearIndex < ZN6::ForwardGearCount - 1)
+	{
+		ShiftUp();
+		SinceShiftS = 0.0f;
+	}
+	else if (Rpm < Assists.DownshiftRpm && Control.GearIndex > 0)
+	{
+		ShiftDown();
+		SinceShiftS = 0.0f;
+	}
+}
+
 void AZN6VehicleActor::PreparePaintMaterials()
 {
 	if (PaintMaterials.Num() > 0 || BodyMesh == nullptr)
@@ -725,6 +753,13 @@ void AZN6VehicleActor::SettleRide()
 	{
 		RideState = Settled;
 		RideOutputs = Outputs;
+		// **釣り合った荷重から始める。** 0 のまま走り出すと、最初の
+		// 1ステップだけ全輪が浮いた扱いになる。
+		for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+		{
+			PreviousContactLoadsN[Wheel] = Outputs.LoadsN[Wheel];
+		}
+		bHasPreviousContactLoads = true;
 		return;
 	}
 
@@ -898,9 +933,18 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 		// **地面を先に調べる。** 車の位置が変わるたびに斜面も変わる。
 		SampleGround();
 
+		// **接地モデルの力をタイヤへ渡す。**
+		//
+		// ride は vehicle の加速度を要るので同時には解けない。前ステップの
+		// 接地力を渡す（1ステップ遅れ）。荷重を1ステップ遅らせるのは
+		// 準静的モデルでも同じことをしている。
+		const double* ContactLoads =
+			(bRideDrivesTyreLoads && IsUsingRideModel() && bHasPreviousContactLoads)
+				? PreviousContactLoadsN : nullptr;
+
 		ZN6::FVehicleState NextState;
 		Vehicle.Step(PhysicsState, Control, FixedStep, NextState, PhysicsOutputs,
-		             SlopeGxMps2, SlopeGyMps2, NormalScale);
+		             SlopeGxMps2, SlopeGyMps2, NormalScale, ContactLoads);
 		PhysicsState = NextState;
 
 		// **当たり判定は Step の後。** 触れていなければ状態は変わらないので、
@@ -923,6 +967,13 @@ void AZN6VehicleActor::AdvancePhysics(double FrameDeltaS)
 			          PhysicsOutputs.AxMps2, PhysicsOutputs.AyMps2,
 			          NextRide, RideOutputs);
 			RideState = NextRide;
+
+			// 次のステップでタイヤへ渡す
+			for (int32 Wheel = 0; Wheel < ZN6::WheelCount; ++Wheel)
+			{
+				PreviousContactLoadsN[Wheel] = RideOutputs.LoadsN[Wheel];
+			}
+			bHasPreviousContactLoads = true;
 		}
 
 		// **セッションの進行は物理の後。** 物理の固定刻みで時間を測るので、
@@ -1150,17 +1201,62 @@ void AZN6VehicleActor::Tick(float DeltaSeconds)
 			}
 			StartFreeRun();
 			SyncInputModeToMenu();
+			// **確認用の走行では自動変速を入れる。** 入れないと1速で
+			// 吹け切ったままになり、撮った画面がいつも同じになる。
+			Assists.bAutoShift = true;
 			UE_LOG(LogTemp, Display, TEXT("ZN6: 自動走行で起動した（確認用）"));
 		}
 	}
 	if (bAutoDrive)
 	{
-		// 全開のままだと FR はすぐスピンする。**7割で流す。**
-		RawThrottle = 0.7f;
+		// **これは撮影用の素朴な運転であって、AIドライバーではない。**
+		// `Physics/driver.py` の PID + スピン検出とは別物。ここは
+		// 「コースに乗ったまま画面を撮れる」ことだけを狙っている。
+		//
+		// 速度を抑える。速いとコーナーで曲がりきれず、撮れる画面が
+		// 毎回「草の上で回っている車」になる（実際そうなった）。
+		constexpr double TargetKmh = 55.0;
+		const double SpeedKmh = PhysicsState.SpeedMps() * ZN6::KmhPerMps;
+		RawThrottle = (SpeedKmh < TargetKmh) ? 0.55f : 0.0f;
+		RawBrake = (SpeedKmh > TargetKmh * 1.25) ? 0.35f : 0.0f;
+
+		// **滑り出したらアクセルを抜く。** FR は踏んだままだと戻らない。
+		const double SlipDeg =
+			FMath::Abs(FMath::RadiansToDegrees(PhysicsState.SideslipRad()));
+		if (SlipDeg > 6.0)
+		{
+			RawThrottle = 0.0f;
+		}
+
+		// **コースを追従する。** 直進のままだと最初のコーナーで
+		// コースアウトし、撮れる画面が毎回「草の上で回っている車」になる。
+		//
+		// 前方 12 m の点がコース中心からどれだけ外れるかを見て、
+		// それを減らす向きへ切る。**今いる位置ではなく前を見る**ことで
+		// 減衰が入り、蛇行しない（純粋な位置制御は必ず振動する）。
 		RawSteer = 0.0f;
+		if (bTrackEdgeLoaded)
+		{
+			constexpr double LookaheadM = 12.0;
+			const double AheadX = PhysicsState.XM
+			                    + FMath::Cos(PhysicsState.HeadingRad) * LookaheadM;
+			const double AheadY = PhysicsState.YM
+			                    + FMath::Sin(PhysicsState.HeadingRad) * LookaheadM;
+
+			double SM = 0.0;
+			double LateralM = 0.0;
+			TrackEdge.NearestPoint(AheadX, AheadY, SM, LateralM);
+
+			// LateralM は左が正。左へ外れていたら右（負）へ切る。
+			// **ここは運転の補助であって車両の特性ではない**（ルール18）。
+			constexpr double GainPerMetre = 0.22;
+			RawSteer = static_cast<float>(
+				FMath::Clamp(-LateralM * GainPerMetre, -1.0, 1.0));
+		}
 	}
 
 	// **入力 -> 物理 -> 描画 の順。** 逆にすると1フレーム遅れる。
+	TickAutoShift(DeltaSeconds);
 	ApplyDriverInput(DeltaSeconds);
 	AdvancePhysics(static_cast<double>(DeltaSeconds));
 	SyncVisualToPhysics();

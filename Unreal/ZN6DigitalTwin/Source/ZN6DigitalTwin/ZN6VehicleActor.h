@@ -86,6 +86,39 @@ struct FZN6FixedStepAccumulator
  * ので、操作感のために補間や制限を入れる必要がある。それは操作系の
  * 都合であって、実車の特性ではない。**vehicle.json に混ぜないこと。**
  */
+/**
+ * 運転支援。**車両仕様ではなく、操作の補助**（憲法ルール18）。
+ *
+ * **必ず切れるようにしてある。** 検証は全部切った状態で行う。
+ * ここの数値に出典は要らない（実車の制御ではないため）が、
+ * **実車の挙動として語らないこと。**
+ */
+USTRUCT()
+struct FZN6DriverAssists
+{
+	GENERATED_BODY()
+
+	/** 自動変速。**既定は off。** 6MT の車なので、入れるのは補助である。 */
+	UPROPERTY(EditAnywhere)
+	bool bAutoShift = false;
+
+	/** シフトアップする回転数 [1/min]。レッドラインより下に置く。 */
+	UPROPERTY(EditAnywhere)
+	float UpshiftRpm = 6800.0f;
+
+	/** シフトダウンする回転数 [1/min]。 */
+	UPROPERTY(EditAnywhere)
+	float DownshiftRpm = 2600.0f;
+
+	/**
+	 * 変速してから次に変速できるまでの間隔 [s]。
+	 *
+	 * **これが無いと、境目で上下に振動して延々と変速し続ける。**
+	 */
+	UPROPERTY(EditAnywhere)
+	float ShiftIntervalS = 0.45f;
+};
+
 USTRUCT()
 struct FZN6DriverFeel
 {
@@ -326,6 +359,33 @@ public:
 	bool IsUsingRideModel() const { return bUseRideModel && bRideReady; }
 
 	/**
+	 * 接地モデルの力をタイヤの垂直荷重として使うか。
+	 *
+	 * **入れると、浮いた車輪のグリップが消える。** 切ると準静的な式に戻る
+	 * （常に正の荷重なので、段差で跳ねてもタイヤが効いたままになる）。
+	 *
+	 * **入れるとラップタイムが変わる。** 左右の荷重配分がばねレートから
+	 * 導出されるようになり、`roll_stiffness_distribution_front`（assumed
+	 * 0.600）ではなくなるため。参照値（Reference/*.json）は準静的のままで、
+	 * こちらの影響を受けない。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Physics")
+	void SetRideDrivesTyreLoads(bool bEnabled) { bRideDrivesTyreLoads = bEnabled; }
+
+	/** 自動変速。**補助であって車両仕様ではない**（ルール18）。切れる。 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Assist")
+	void SetAutoShift(bool bEnabled) { Assists.bAutoShift = bEnabled; }
+
+	UFUNCTION(BlueprintPure, Category = "ZN6|Assist")
+	bool IsAutoShiftEnabled() const { return Assists.bAutoShift; }
+
+	UFUNCTION(BlueprintPure, Category = "ZN6|Physics")
+	bool IsRideDrivingTyreLoads() const
+	{
+		return bRideDrivesTyreLoads && IsUsingRideModel();
+	}
+
+	/**
 	 * 今いる地面の上で釣り合い姿勢に落ち着かせる。
 	 *
 	 * **位置を変えたら呼ぶこと。** 呼ばないと、前の場所の姿勢のまま
@@ -460,6 +520,16 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "ZN6|Physics")
 	FZN6FixedStepAccumulator Accumulator;
+
+	/** 運転支援。**車両仕様ではない。既定は全部 off。** */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Assist")
+	FZN6DriverAssists Assists;
+
+	/** 最後に変速してからの時間 [s]。連続変速を防ぐ。 */
+	float SinceShiftS = 0.0f;
+
+	/** 自動変速を1ステップぶん働かせる。**入っているときだけ。** */
+	void TickAutoShift(float DeltaSeconds);
 
 private:
 	ZN6::FVehicleData VehicleData;
@@ -607,6 +677,19 @@ private:
 	ZN6::FRideOutputs RideOutputs;
 	bool bRideReady = false;
 	bool bUseRideModel = true;
+
+	/**
+	 * 接地モデルの力をタイヤの垂直荷重に使う。**既定で入れる。**
+	 *
+	 * 入れないと「車輪が浮く」のが見た目と接地判定だけになり、
+	 * 浮いた輪のグリップが消えない。物理として不完全なので既定を on にする。
+	 * 参照値は `FVehicle::Step` の既定（準静的）のままなので影響しない。
+	 */
+	bool bRideDrivesTyreLoads = true;
+
+	/** 前ステップの接地力。**1ステップ遅らせて渡す。** */
+	double PreviousContactLoadsN[ZN6::WheelCount] = {};
+	bool bHasPreviousContactLoads = false;
 
 	/** 各車輪の下の地面の高さ [m]。SampleGround が更新する。 */
 	double WheelGroundM[ZN6::WheelCount] = {};

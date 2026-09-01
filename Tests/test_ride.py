@@ -404,3 +404,148 @@ def test_既定の走行が変わらない(data):
     assert first.vx_mps == second.vx_mps
     assert first.x_m == second.x_m
     assert first.yaw_rate_rads == second.yaw_rate_rads
+
+
+# --- 接地力をタイヤへ繋ぐ ---------------------------------------------------
+
+
+def test_接地力を渡さなければ結果が変わらない(data):
+    """**繋いだこと自体で、検証済みの結果を動かさない。**"""
+    from vehicle import ControlInput
+
+    control = ControlInput(gear="3", throttle=1.0, brake=0.0,
+                           steer_rad=0.04, clutch=1.0, handbrake=0.0)
+
+    def run(pass_none):
+        vehicle = Vehicle(data)
+        state = vehicle.initial_state(speed_mps=70.0 / 3.6, gear="3")
+        for _ in range(300):
+            if pass_none:
+                state, _ = vehicle.step(state, control, 0.002,
+                                        contact_loads_n=None)
+            else:
+                state, _ = vehicle.step(state, control, 0.002)
+        return state
+
+    explicit = run(True)
+    implicit = run(False)
+    assert explicit.vx_mps == implicit.vx_mps
+    assert explicit.vy_mps == implicit.vy_mps
+    assert explicit.yaw_rate_rads == implicit.yaw_rate_rads
+
+
+def test_浮いた車輪はタイヤ力を出さない(data):
+    """**これが今まで出来ていなかった。**
+
+    接地モデルが「その輪は地面を押していない」と言っているのに、
+    タイヤは準静的な荷重（常に正）で力を出し続けていた。
+    段差で跳ねてもタイヤが効いたままになる。
+    """
+    from vehicle import ControlInput
+
+    vehicle = Vehicle(data)
+    state = vehicle.initial_state(speed_mps=60.0 / 3.6, gear="3")
+    control = ControlInput(gear="3", throttle=0.5, brake=0.0,
+                           steer_rad=0.05, clutch=1.0, handbrake=0.0)
+
+    # 左前だけ浮かせる
+    quasi = vehicle.wheel_loads_n(0.0, 0.0)
+    lifted = dict(quasi)
+    lifted["FL"] = 0.0
+
+    state, outputs = vehicle.step(state, control, 0.002, contact_loads_n=lifted)
+
+    assert outputs.tire_fz_n["FL"] == 0.0
+    assert outputs.tire_fx_n["FL"] == 0.0, "浮いた車輪が前後力を出している"
+    assert outputs.tire_fy_n["FL"] == 0.0, "浮いた車輪が横力を出している"
+    # 他の輪は出している
+    assert abs(outputs.tire_fy_n["FR"]) > 0.0
+
+
+def test_四輪とも浮いたらタイヤ力がゼロ(data):
+    """飛んでいる車は曲がれない。"""
+    from vehicle import ControlInput
+
+    vehicle = Vehicle(data)
+    state = vehicle.initial_state(speed_mps=80.0 / 3.6, gear="4")
+    control = ControlInput(gear="4", throttle=1.0, brake=0.0,
+                           steer_rad=0.20, clutch=1.0, handbrake=0.0)
+
+    airborne = {wheel: 0.0 for wheel in WHEELS}
+    before_yaw = state.yaw_rate_rads
+    for _ in range(50):
+        state, outputs = vehicle.step(state, control, 0.002,
+                                      contact_loads_n=airborne)
+
+    for wheel in WHEELS:
+        assert outputs.tire_fx_n[wheel] == 0.0
+        assert outputs.tire_fy_n[wheel] == 0.0
+    # ヨーは増えない（空力モーメントは持っていない）
+    assert abs(state.yaw_rate_rads - before_yaw) < 1e-9
+
+
+def test_車輪が足りなければ止まる(data):
+    """**黙って準静的へ戻さない**（憲法ルール6）。
+
+    戻すと「接地モデルを使っているつもりで使えていない」状態に
+    気づけない。
+    """
+    from vehicle import ControlInput
+
+    vehicle = Vehicle(data)
+    state = vehicle.initial_state(speed_mps=50.0 / 3.6, gear="2")
+    control = ControlInput(gear="2", throttle=0.3, brake=0.0,
+                           steer_rad=0.0, clutch=1.0, handbrake=0.0)
+
+    with pytest.raises(ValueError):
+        vehicle.step(state, control, 0.002, contact_loads_n={"FL": 3000.0})
+
+
+def test_負の接地力を通さない(data):
+    """地面は押せるが引けない。"""
+    from vehicle import ControlInput
+
+    vehicle = Vehicle(data)
+    state = vehicle.initial_state(speed_mps=50.0 / 3.6, gear="2")
+    control = ControlInput(gear="2", throttle=0.3, brake=0.0,
+                           steer_rad=0.0, clutch=1.0, handbrake=0.0)
+
+    negative = {wheel: -500.0 for wheel in WHEELS}
+    _, outputs = vehicle.step(state, control, 0.002, contact_loads_n=negative)
+    for wheel in WHEELS:
+        assert outputs.tire_fz_n[wheel] == 0.0
+
+
+def test_定常では接地モデルと準静的が同じ走りになる(data, ride):
+    """**繋いでも、平地の定常走行は変わらないこと。**
+
+    前後の荷重移動は既に一致することを確かめてある。ここでは
+    「実際に走らせても大きく違わない」ことを見る。
+    左右はばねから導出するぶん違うので、厳密一致は求めない。
+    """
+    from vehicle import ControlInput
+
+    control = ControlInput(gear="3", throttle=0.6, brake=0.0,
+                           steer_rad=0.0, clutch=1.0, handbrake=0.0)
+
+    def run(use_ride):
+        vehicle = Vehicle(data)
+        model = RideModel(data)
+        state = vehicle.initial_state(speed_mps=60.0 / 3.6, gear="3")
+        ride_state, ride_out = model.settle(FLAT)
+        loads = ride_out.loads_n
+
+        for _ in range(500):
+            state, outputs = vehicle.step(
+                state, control, 0.002,
+                contact_loads_n=loads if use_ride else None)
+            ride_state, ride_out = model.step(
+                ride_state, 0.002, FLAT,
+                ax_mps2=outputs.ax_mps2, ay_mps2=outputs.ay_mps2)
+            loads = ride_out.loads_n
+        return state.vx_mps
+
+    quasi = run(False)
+    with_ride = run(True)
+    assert with_ride == pytest.approx(quasi, rel=1e-3), (
+        "直線加速で {:.4f} と {:.4f} が食い違う".format(with_ride, quasi))

@@ -239,7 +239,8 @@ class Vehicle:
 
     def step(self, state: VehicleState, control: ControlInput, dt_s: float,
              slope_gx_mps2: float = 0.0, slope_gy_mps2: float = 0.0,
-             normal_scale: float = 1.0):
+             normal_scale: float = 1.0,
+             contact_loads_n: Dict[str, float] = None):
         """状態を dt 進め、(新しい状態, 内部量) を返す。
 
         `slope_*` は斜面が車体に与える重力成分 [m/s^2]（車体固定系）、
@@ -248,14 +249,41 @@ class Vehicle:
 
         地形の値は `Physics/terrain.py` が高さ場から求める。
         **描画メッシュからは読まない**（憲法ルール4）。
+
+        `contact_loads_n` を渡すと、垂直荷重を準静的な式ではなく
+        **`Physics/ride.py` が力の釣り合いで解いた接地力**にする。
+
+        これが無いと、**浮いた車輪のグリップが消えない。** 接地モデルは
+        「その輪は地面を押していない」と言っているのに、タイヤは
+        準静的な荷重（常に正）で力を出し続ける。段差で跳ねても
+        タイヤが効いたままになり、飛んでいる車が曲がれてしまう。
+
+        **既定は None で、そのときは今までと1ビットも変わらない。**
+        検証済みの結果を、接続そのもので動かさないため。
+
+        呼ぶ側は前ステップの接地力を渡す（1ステップ遅れ）。ride は
+        vehicle の加速度を要るので、同時には解けない。dt が十分小さければ
+        差は無視できる（荷重を1ステップ遅らせるのと同じ理屈）。
         """
         outputs = VehicleOutputs()
 
-        # --- 前ステップの加速度から荷重を決める（準静的） ---
-        # 反復せず1ステップ遅らせる。dt が十分小さければ差は無視できる。
-        ax_prev = getattr(self, "_last_ax", 0.0)
-        ay_prev = getattr(self, "_last_ay", 0.0)
-        fz = self.wheel_loads_n(ax_prev, ay_prev, normal_scale)
+        # --- 垂直荷重 ---
+        if contact_loads_n is None:
+            # 前ステップの加速度から荷重を決める（準静的）。
+            # 反復せず1ステップ遅らせる。dt が十分小さければ差は無視できる。
+            ax_prev = getattr(self, "_last_ax", 0.0)
+            ay_prev = getattr(self, "_last_ay", 0.0)
+            fz = self.wheel_loads_n(ax_prev, ay_prev, normal_scale)
+        else:
+            missing = [w for w in WHEELS if w not in contact_loads_n]
+            if missing:
+                # **黙って準静的へ戻さない**（憲法ルール6）。
+                # 戻すと「接地モデルを使っているつもりで使えていない」
+                # 状態に気づけない。
+                raise ValueError(
+                    "contact_loads_n に {} が無い".format(", ".join(missing)))
+            # **負を通さない。** 地面は押せるが引けない。
+            fz = {w: max(contact_loads_n[w], 0.0) for w in WHEELS}
 
         # --- エンジンとクラッチ ---
         #
