@@ -1,7 +1,7 @@
 {
  "_meta": {
   "generator": "Blender/build_track.py",
-  "source_track": "Tracks/physics_test_track.json",
+  "source_track": "C:/Program Files (x86)/Steam/steamapps/common/assettocorsa/grantucorsa/Tracks/physics_test_track.json",
   "frame": "physics (X forward-ish, Y left, Z up, metres)",
   "note": "UE 側はこの配置で樹木をインスタンス化する。手で編集しない。"
  },

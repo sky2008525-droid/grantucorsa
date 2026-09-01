@@ -62,6 +62,17 @@ RELIEF_BLEND_M = 200.0
 # 実際の道路も路肩より数 cm 高いので、下げること自体は不自然ではない。
 GROUND_SINK_M = 0.05
 
+#: 路面の厚み [m]。**上面は z=0 のまま、下へ押し出す。**
+#:
+#: これが無いと路面は厚さゼロのリボンで、低い視点から見たときに
+#: 「草地に貼った帯」にしか見えない。舗装の切り口が見えると立体になる。
+#:
+#: **上面を動かさないこと。** 物理は z=0 の平面を走る（このファイルの
+#: 冒頭の注記）。下へ伸ばすぶんには走行面に影響しない。
+#: 地面は GROUND_SINK_M だけ沈めてあるので、実際に見える段差は
+#: 5cm だが、切り口があるだけで印象が変わる。
+ROAD_THICKNESS_M = 0.14
+
 # 路面テクスチャの繰り返し間隔 [m]（UV の V 方向）
 ROAD_UV_REPEAT_M = 8.0
 
@@ -100,34 +111,42 @@ def build_road(points, width_m):
     bm = bmesh.new()
     uv_layer = bm.loops.layers.uv.new("UVMap")
 
+    # 上面（走行面。**必ず z=0**）と、その真下の縁。
     rows = []
     for p in points:
         heading = p["heading_rad"]
         # 左手側の法線（物理の座標系で Y が左）
         nx = -math.sin(heading)
         ny = math.cos(heading)
-        left = bm.verts.new((p["x_m"] + nx * half, p["y_m"] + ny * half, 0.0))
-        right = bm.verts.new((p["x_m"] - nx * half, p["y_m"] - ny * half, 0.0))
-        rows.append((left, right, p["s_m"]))
+        lx, ly = p["x_m"] + nx * half, p["y_m"] + ny * half
+        rx, ry = p["x_m"] - nx * half, p["y_m"] - ny * half
+
+        left = bm.verts.new((lx, ly, 0.0))
+        right = bm.verts.new((rx, ry, 0.0))
+        # **下へ押し出す。** 上面は動かさない（物理は z=0 の平面を走る）。
+        left_low = bm.verts.new((lx, ly, -ROAD_THICKNESS_M))
+        right_low = bm.verts.new((rx, ry, -ROAD_THICKNESS_M))
+        rows.append((left, right, left_low, right_low, p["s_m"]))
 
     bm.verts.ensure_lookup_table()
 
     count = len(rows)
     for index in range(count):
-        left_a, right_a, s_a = rows[index]
+        left_a, right_a, left_low_a, right_low_a, s_a = rows[index]
         # **最後の点は先頭へ繋ぐ。** 閉じた周回なので、ここを繋がないと
         # スタートラインに幅 1 m の隙間が開く。
-        left_b, right_b, s_b = rows[(index + 1) % count]
+        left_b, right_b, left_low_b, right_low_b, s_b = rows[(index + 1) % count]
         if index + 1 == count:
-            s_b = s_a + (rows[1][2] - rows[0][2])
+            s_b = s_a + (rows[1][4] - rows[0][4])
+
+        v_a = s_a / ROAD_UV_REPEAT_M
+        v_b = s_b / ROAD_UV_REPEAT_M
 
         try:
             face = bm.faces.new((left_a, right_a, right_b, left_b))
         except ValueError:
             continue                      # 同一面の重複。閉合部で起こりうる
 
-        v_a = s_a / ROAD_UV_REPEAT_M
-        v_b = s_b / ROAD_UV_REPEAT_M
         for loop in face.loops:
             if loop.vert in (left_a, left_b):
                 u = 0.0
@@ -135,6 +154,25 @@ def build_road(points, width_m):
                 u = 1.0
             v = v_a if loop.vert in (left_a, right_a) else v_b
             loop[uv_layer].uv = (u, v)
+
+        # --- 側面（舗装の切り口）---
+        #
+        # **法線が外を向くように巻く。** 逆に巻くと内側からしか見えず、
+        # 「厚みを付けたのに何も変わらない」ように見える。
+        for verts, u_base in (
+                ((left_b, left_a, left_low_a, left_low_b), 0.0),
+                ((right_a, right_b, right_low_b, right_low_a), 1.0)):
+            try:
+                side = bm.faces.new(verts)
+            except ValueError:
+                continue
+            for loop in side.loops:
+                # 側面は縦に細長い。U を厚み方向、V を距離にする。
+                on_top = abs(loop.vert.co.z) < 1e-9
+                loop[uv_layer].uv = (
+                    u_base + (0.0 if on_top else ROAD_THICKNESS_M / ROAD_UV_REPEAT_M),
+                    (v_a if loop.vert in (left_a, right_a, left_low_a, right_low_a)
+                     else v_b))
 
     bm.normal_update()
     bm.to_mesh(mesh)
@@ -354,11 +392,29 @@ def main():
     log("ground: %d 面 (%.1fs)", len(ground.data.polygons), time.time() - started)
 
     # 走行面が本当に平らかを確認する。**目視ではなく数値で。**
-    road_z = [v.co.z for v in road.data.vertices]
-    if max(abs(z) for z in road_z) > 1e-9:
-        log("!! 路面が平らでない (max |z| = %.6f)", max(abs(z) for z in road_z))
+    #
+    # 厚みを付けたので、頂点は上面（z=0）か下面（z=-ROAD_THICKNESS_M）の
+    # どちらかになる。**その2つ以外が現れたら、走行面が傾いている。**
+    top = 0
+    bottom = 0
+    worst_top = 0.0
+    for vert in road.data.vertices:
+        z = vert.co.z
+        if abs(z) < 1e-9:
+            top += 1
+        elif abs(z + ROAD_THICKNESS_M) < 1e-9:
+            bottom += 1
+        else:
+            log("!! 路面に上面でも下面でもない頂点がある (z = %.6f)", z)
+            return 1
+        if abs(z) < ROAD_THICKNESS_M / 2.0:
+            worst_top = max(worst_top, abs(z))
+
+    if top == 0:
+        log("!! 路面に上面の頂点が無い")
         return 1
-    log("路面の平坦性 OK (max |z| = %.2e)", max(abs(z) for z in road_z))
+    log("路面の平坦性 OK (上面 %d 頂点 max |z| = %.2e / 下面 %d 頂点、厚み %.3f m)",
+        top, worst_top, bottom, ROAD_THICKNESS_M)
 
     # **車が到達しうる範囲の地面も平らかを確認する。**
     #
