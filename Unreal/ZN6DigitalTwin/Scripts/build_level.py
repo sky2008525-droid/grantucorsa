@@ -22,6 +22,7 @@
 import json
 import math
 import os
+import sys
 
 import unreal
 
@@ -31,7 +32,15 @@ PKG_TRACK = PKG_ROOT + "/Track"
 PKG_FOLIAGE = PKG_ROOT + "/Foliage"
 PKG_TEXTURE = PKG_ROOT + "/Textures"
 PKG_MATERIAL = PKG_ROOT + "/Materials"
-LEVEL_PATH = PKG_ROOT + "/Maps/PhysicsTestTrack"
+#: どのコースを組むか。**コマンドラインで渡す。**
+#:
+#:     -ExecutePythonScript="build_level.py technical_circuit"
+#:
+#: 省略すると既存のコース。`Tracks/Export/<key>/` と
+#: `/Game/ZN6/Track/<key>/` を読み、`/Game/ZN6/Maps/<key>` を作る。
+TRACK_KEY = sys.argv[1] if len(sys.argv) > 1 else "physics_test_track"
+
+LEVEL_PATH = PKG_ROOT + "/Maps/" + TRACK_KEY
 
 M_TO_CM = 100.0
 
@@ -356,7 +365,8 @@ def place_track(road_material, ground_material):
     placed = []
     for mesh_name, material in (("TrackRoad", road_material),
                                 ("TrackGround", ground_material)):
-        mesh = find_asset(PKG_TRACK, mesh_name, unreal.StaticMesh)
+        mesh = find_asset("%s/%s" % (PKG_TRACK, TRACK_KEY), mesh_name,
+                          unreal.StaticMesh)
         if mesh is None:
             unreal.log_error("[ZN6 level] %s が無い" % mesh_name)
             continue
@@ -397,7 +407,7 @@ def tree_meshes():
 
 
 def place_trees(root):
-    with open(os.path.join(root, "Tracks", "Export", "placement.json"),
+    with open(os.path.join(root, "Tracks", "Export", TRACK_KEY, "placement.json"),
               encoding="utf-8") as handle:
         placement = json.load(handle)
 

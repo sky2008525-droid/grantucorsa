@@ -230,18 +230,51 @@ def import_vehicle(root):
     return run_tasks(tasks)
 
 
-def import_track(root):
-    export_dir = os.path.join(root, "Tracks", "Export")
-    tasks = []
-    for name in ("TrackRoad.fbx", "TrackGround.fbx"):
-        path = os.path.join(export_dir, name)
-        if not os.path.isfile(path):
-            unreal.log_error("[ZN6 import] コースメッシュが無い: %s" % path)
-            continue
-        tasks.append(build_task(path, PKG_TRACK, static_mesh_options()))
+def track_keys(root):
+    """`Tracks/Export/` の下にあるコースの一覧。
 
-    log("コースメッシュ %d 個を取り込む" % len(tasks))
-    return run_tasks(tasks)
+    **フォルダの有無で決める。** 一覧をここに書くと、コースを増やすたびに
+    2 箇所を直すことになり、必ず片方を忘れる。
+    """
+    export_dir = os.path.join(root, "Tracks", "Export")
+    if not os.path.isdir(export_dir):
+        return []
+    keys = []
+    for name in sorted(os.listdir(export_dir)):
+        folder = os.path.join(export_dir, name)
+        if os.path.isfile(os.path.join(folder, "TrackRoad.fbx")):
+            keys.append(name)
+    return keys
+
+
+def import_track(root):
+    """コースごとに `/Game/ZN6/Track/<key>/` へ取り込む。
+
+    **同じ名前のメッシュが複数のコースにある**（TrackRoad / TrackGround）
+    ので、フォルダを分けないと後から取り込んだものが前を上書きする。
+    """
+    keys = track_keys(root)
+    if not keys:
+        unreal.log_error(
+            "[ZN6 import] コースメッシュが1つも無い。"
+            "先に Tools/build_tracks.sh を走らせること")
+        return []
+
+    imported = []
+    for key in keys:
+        folder = os.path.join(root, "Tracks", "Export", key)
+        tasks = []
+        for name in ("TrackRoad.fbx", "TrackGround.fbx"):
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                unreal.log_error("[ZN6 import] %s が無い" % path)
+                continue
+            tasks.append(build_task(path, "%s/%s" % (PKG_TRACK, key),
+                                    static_mesh_options()))
+        log("コース %s: メッシュ %d 個" % (key, len(tasks)))
+        imported += run_tasks(tasks)
+
+    return imported
 
 
 def import_generated_textures(root):

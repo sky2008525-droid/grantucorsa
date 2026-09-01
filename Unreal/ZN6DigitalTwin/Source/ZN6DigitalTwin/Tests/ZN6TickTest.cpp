@@ -785,7 +785,7 @@ bool FZN6TerrainAffectsTheCar::RunTest(const FString& Parameters)
 	// --- 高さ場 ---
 	const FString HeightfieldPath =
 		FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("../..")) /
-		TEXT("Tracks/Export/heightfield.json");
+		TEXT("Tracks/Export/physics_test_track/heightfield.json");
 
 	ZN6::FHeightfield Field;
 	FString Error;

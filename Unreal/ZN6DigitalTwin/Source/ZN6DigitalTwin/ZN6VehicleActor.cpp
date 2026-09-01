@@ -147,14 +147,32 @@ void AZN6VehicleActor::BeginPlay()
 	}
 
 	// 地形。**読めなければ平地として走る**（既定値をでっち上げない）。
-	if (!LoadHeightfield(RepoRoot / TEXT("Tracks/Export/heightfield.json"), Error))
+	// **どのコースを走るか。**
+	//
+	// レベルごとに違うコースを読む必要がある。レベル名は
+	// `/Game/ZN6/Maps/<key>` なので、そこから取るのが確実
+	// （`-ZN6Track=` で上書きもできる）。
+	//
+	// **決め打ちにしないこと。** 決め打ちだと、別のレベルを開いても
+	// 車だけが前のコースの地形と樹木を読み続け、**見えない木にぶつかる**
+	// という原因の分からない状態になる。
+	FString TrackKey = (GetWorld() != nullptr) ? GetWorld()->GetName() : FString();
+	FParse::Value(FCommandLine::Get(), TEXT("ZN6Track="), TrackKey);
+	if (TrackKey.IsEmpty())
+	{
+		TrackKey = TEXT("physics_test_track");
+	}
+	const FString TrackDir = RepoRoot / TEXT("Tracks/Export") / TrackKey;
+	UE_LOG(LogTemp, Display, TEXT("ZN6: コース = %s"), *TrackKey);
+
+	if (!LoadHeightfield(TrackDir / TEXT("heightfield.json"), Error))
 	{
 		UE_LOG(LogTemp, Warning,
 		       TEXT("ZN6: 地形を読めない: %s。平地として走る。"), *Error);
 	}
 
 	// コース定義。**周回計測・ミニマップ・音の混合が読む。**
-	if (!LoadTrack(RepoRoot / TEXT("Tracks/physics_test_track.json"), Error))
+	if (!LoadTrack(RepoRoot / TEXT("Tracks") / (TrackKey + TEXT(".json")), Error))
 	{
 		UE_LOG(LogTemp, Warning,
 		       TEXT("ZN6: コース定義を読めない: %s。計測とミニマップが働かない。"),
@@ -178,7 +196,7 @@ void AZN6VehicleActor::BeginPlay()
 	// 障害物。**読めなければ当たり判定なしで走る。**
 	// 木をすり抜けるのは明らかに分かるが、でっち上げた境界に阻まれるのは
 	// 原因が分からない。
-	if (!LoadObstacles(RepoRoot / TEXT("Tracks/Export/placement.json"), Error))
+	if (!LoadObstacles(TrackDir / TEXT("placement.json"), Error))
 	{
 		UE_LOG(LogTemp, Warning,
 		       TEXT("ZN6: 障害物を読めない: %s。当たり判定なしで走る。"), *Error);

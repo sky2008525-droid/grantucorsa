@@ -212,7 +212,7 @@ bool FZN6ObstacleFieldResolves::RunTest(const FString& Parameters)
 	}
 
 	ZN6::FObstacleField Field;
-	if (!Field.LoadFromPlacement(RepoRoot / TEXT("Tracks/Export/placement.json"), Error))
+	if (!Field.LoadFromPlacement(RepoRoot / TEXT("Tracks/Export/physics_test_track/placement.json"), Error))
 	{
 		AddError(FString::Printf(TEXT("配置データを読めない: %s"), *Error));
 		return false;
@@ -400,7 +400,7 @@ bool FZN6ObstacleWorldBounds::RunTest(const FString& Parameters)
 	}
 
 	ZN6::FObstacleField Field;
-	if (!Field.LoadFromPlacement(RepoRoot / TEXT("Tracks/Export/placement.json"), Error))
+	if (!Field.LoadFromPlacement(RepoRoot / TEXT("Tracks/Export/physics_test_track/placement.json"), Error))
 	{
 		AddError(FString::Printf(TEXT("配置データを読めない: %s"), *Error));
 		return false;
