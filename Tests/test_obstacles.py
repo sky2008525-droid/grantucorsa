@@ -17,7 +17,9 @@ from vehicle import ControlInput, Vehicle, VehicleState
 from vehicle_data import VehicleData
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PLACEMENT = REPO_ROOT / "Tracks" / "Export" / "placement.json"
+# **コースごとにフォルダが分かれている。** 検証用のコースを使う。
+PLACEMENT = (REPO_ROOT / "Tracks" / "Export" / "physics_test_track"
+             / "placement.json")
 
 
 @pytest.fixture(scope="module")

@@ -347,9 +347,11 @@ class ObstacleField:
         )
 
     @classmethod
-    def from_export(cls, repo_root, feel: ObstacleFeel = ObstacleFeel()) -> "ObstacleField":
+    def from_export(cls, repo_root, feel: ObstacleFeel = ObstacleFeel(),
+                    track_key: str = "physics_test_track") -> "ObstacleField":
         return cls.from_placement(
-            Path(repo_root) / "Tracks" / "Export" / "placement.json", feel
+            Path(repo_root) / "Tracks" / "Export" / track_key / "placement.json",
+            feel
         )
 
     # --- 解決 -------------------------------------------------------------

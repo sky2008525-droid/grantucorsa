@@ -17,7 +17,9 @@ from vehicle import ControlInput, Vehicle
 from vehicle_data import VehicleData
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-HEIGHTFIELD = REPO_ROOT / "Tracks" / "Export" / "heightfield.json"
+# **コースごとにフォルダが分かれている。** 検証用のコースを使う。
+HEIGHTFIELD = (REPO_ROOT / "Tracks" / "Export" / "physics_test_track"
+               / "heightfield.json")
 
 pytestmark = pytest.mark.skipif(
     not HEIGHTFIELD.exists(),

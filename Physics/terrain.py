@@ -61,8 +61,9 @@ class Heightfield:
         self.y1_m = self.y0_m + (self.ny - 1) * self.cell_m
 
     @classmethod
-    def from_export(cls, repo_root) -> "Heightfield":
-        return cls(Path(repo_root) / "Tracks" / "Export" / "heightfield.json")
+    def from_export(cls, repo_root, track_key: str = "physics_test_track") -> "Heightfield":
+        return cls(Path(repo_root) / "Tracks" / "Export" / track_key
+                   / "heightfield.json")
 
     # --- 標本 -------------------------------------------------------------
 
