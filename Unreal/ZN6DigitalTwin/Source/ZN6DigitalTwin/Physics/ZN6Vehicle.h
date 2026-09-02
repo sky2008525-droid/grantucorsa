@@ -9,10 +9,23 @@
 //
 // **6自由度ではなく平面3自由度にした理由**
 //
-// スプリングレート・ダンパー減衰力・スタビ径・サスペンションジオメトリが
-// すべて unknown である。上下・ロール・ピッチの**動特性**を入れると、その
-// 全てを捏造することになる（憲法ルール1）。代わりに荷重移動を**準静的**に
-// 扱う。ロール角の時間応答は出ないが、**定常的な4輪の荷重は正しく出る**。
+// 上下・ロール・ピッチの**動特性**を入れるのに必要な値が揃っていない。
+// vehicle.json の実際の状態は次のとおり（「すべて unknown」ではない）:
+//
+//   spring_rate_front / rear   estimated だが、**モーションレシオが unknown
+//                              なのでホイールレートが決まらない**（WARNING 参照）
+//   damper_front / rear        **"unknown"**（値が無いことを明記してある）
+//   arb_front / rear           measured
+//   ロールセンタ高さ           項目そのものが無い
+//
+// つまりロール剛性も減衰も導けない。入れれば捏造になる（憲法ルール1）。
+// 代わりに荷重移動を**準静的**に扱う。ロール角の時間応答は出ないが、
+// **定常的な4輪の荷重は正しく出る**。
+//
+// 描画側（AZN6VehicleActor）は、この荷重移動を車体の傾きとして見せている。
+// **あれは実車のロール角ではなく、荷重移動の可視化**であり、係数は
+// vehicle.json の外に演出値として置いてある（憲法ルール18）。
+// データが揃ったら本物のロール自由度に置き換えること（issue #19）。
 //
 // **Python 版と数値が一致することが Phase 8 の判定基準。**
 // 積分の順序・部分ステップ数・ロック判定のしきい値を勝手に「改善」しないこと。
@@ -21,6 +34,7 @@
 
 #include "CoreMinimal.h"
 #include "ZN6Components.h"
+#include "ZN6Setup.h"
 #include "ZN6VehicleData.h"
 
 // **数学関数は FMath ではなく標準ライブラリを使う。** 理由は
@@ -39,6 +53,13 @@ namespace ZN6
 		double Throttle = 0.0;
 		double Brake = 0.0;
 		double SteerRad = 0.0;
+
+		/**
+		 * 入れている段。**0..5 が 1速..6速。**
+		 * `GearNeutral`(-1) と `GearReverse`(-2) は前進段の**外側**にある
+		 * （「6速の次」ではない）。Python 側の `ControlInput.gear` の
+		 * `"1"`-`"6"` / `"N"` / `"R"` に対応する。
+		 */
 		int32 GearIndex = 0;
 
 		/**
@@ -100,19 +121,67 @@ namespace ZN6
 	class FVehicle
 	{
 	public:
-		bool Init(FVehicleData& Data, bool bUseLsd, FString& OutError);
+		/**
+		 * @param InSetup  セッティング。**既定は「何も変えない」**で、
+		 *                 そのときの結果はセッティング機能を入れる前と
+		 *                 ビット単位で一致する。
+		 */
+		bool Init(FVehicleData& Data, bool bUseLsd, FString& OutError,
+		          const FCarSetup& InSetup = FCarSetup());
 
-		/** 状態を Dt 進め、新しい状態と内部量を返す。 */
+		/** その車輪が向いている角度 [rad]。操舵にトーを足したもの。 */
+		double WheelSteerRad(int32 WheelIndex, double SteerRad) const;
+
+		const FCarSetup& GetSetup() const { return Setup; }
+		/** 車高を変える前の重心高 [m]。**基準値は書き換えない。** */
+		double GetCgHeightBaselineM() const { return CgHeightBaselineM; }
+
+		/**
+		 * 状態を Dt 進め、新しい状態と内部量を返す。
+		 *
+		 * SlopeG* は斜面が車体に与える重力成分 [m/s^2]（車体固定系）、
+		 * NormalScale は法線荷重の係数。**既定は平地**で、そのときの結果は
+		 * 地形を入れる前と完全に一致する（参照値が変わらない）。
+		 *
+		 * 地形の値は ZN6Terrain が高さ場から求める。
+		 * **描画メッシュからは読まない**（憲法ルール4）。
+		 */
+		/**
+		 * @param ContactLoadsN  接地モデルが解いた垂直荷重 [N]（4輪）。
+		 *   nullptr なら準静的な式を使う（既定。**そのときの結果は
+		 *   今までと1ビットも変わらない**）。
+		 *
+		 *   渡すと、**浮いた車輪のグリップが消える。** これが無いと、
+		 *   接地モデルが「地面を押していない」と言っている輪でも
+		 *   タイヤは準静的な荷重（常に正）で力を出し続け、段差で跳ねても
+		 *   曲がれてしまう。
+		 */
 		void Step(const FVehicleState& State, const FControlInput& Control, double DtS,
-		          FVehicleState& OutState, FVehicleOutputs& OutOutputs);
+		          FVehicleState& OutState, FVehicleOutputs& OutOutputs,
+		          double SlopeGxMps2 = 0.0, double SlopeGyMps2 = 0.0,
+		          double NormalScale = 1.0,
+		          const double* ContactLoadsN = nullptr);
 
-		/** 準静的な4輪の垂直荷重 [N]。FR なので加速で駆動輪（後輪）に乗る。 */
-		void WheelLoadsN(double AxMps2, double AyMps2, double OutLoadsN[WheelCount]) const;
+		/**
+		 * 準静的な4輪の垂直荷重 [N]。FR なので加速で駆動輪（後輪）に乗る。
+		 *
+		 * **Ax / Ay は加速度計が読む値（タイヤ力/質量）を渡すこと。**
+		 * 斜面で停車していると、タイヤ力が重力と釣り合って Ax = g*sin(傾き)
+		 * になり、坂の下側の軸へ荷重が移るという正しい結果が出る。
+		 * 重力を別に足すと二重に数えることになる。
+		 */
+		void WheelLoadsN(double AxMps2, double AyMps2, double OutLoadsN[WheelCount],
+		                 double NormalScale = 1.0) const;
 
 		FVehicleState InitialState(double SpeedMps, int32 GearIndex) const;
 
 		double GetConfidence() const { return Confidence; }
 		bool IsValidatable() const { return bValidatable; }
+
+		// **当たり判定が使う。** 質量と慣性を当たり判定側で持たせると、
+		// vehicle.json とずれた値で衝突を解くことになる。
+		double GetMassKg() const { return MassKg; }
+		double GetIzzKgm2() const { return IzzKgm2; }
 
 	private:
 		/** 車輪位置での接地点速度を、車輪座標系で返す。 */
@@ -140,6 +209,9 @@ namespace ZN6
 		FAerodynamics Aero;
 		FDifferential Differential;
 		FTire Tire;
+
+		FCarSetup Setup;
+		double CgHeightBaselineM = 0.0;
 
 		double MassKg = 0.0;
 		double IzzKgm2 = 0.0;

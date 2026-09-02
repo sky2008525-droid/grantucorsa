@@ -149,3 +149,11 @@ Data/**/*.svg
 #
 # Phase 9 以降で Tripo 生成 GLB・PBR テクスチャ・FBX を置くと
 # リポジトリが急激に肥大する。そのタイミングで Git LFS の導入を検討すること。
+
+# Phase 14: 手続き合成した音のループ。**コードから再生成できる**ので置かない。
+#   python Audio/synth.py
+Audio/Generated/
+
+# Phase 15: 実在コースの入力データ。**リポジトリに置かない。**
+# 出所によって再配布条件が違う（Docs/PHASE15_DATA_LICENCE.md）。
+Tracks/Import/

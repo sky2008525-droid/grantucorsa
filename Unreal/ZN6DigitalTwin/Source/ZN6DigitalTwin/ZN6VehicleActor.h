@@ -16,6 +16,16 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "Audio/ZN6VehicleAudioComponent.h"
+#include "Game/ZN6RaceDirector.h"
+#include "Game/ZN6Replay.h"
+#include "UI/ZN6HudSnapshot.h"
+#include "UI/ZN6Livery.h"
+#include "Visual/ZN6TyreMarkComponent.h"
+#include "Physics/ZN6Obstacles.h"
+#include "Physics/ZN6Ride.h"
+#include "Physics/ZN6Track.h"
+#include "Physics/ZN6Terrain.h"
 #include "Physics/ZN6Vehicle.h"
 #include "ZN6VehicleActor.generated.h"
 
@@ -78,6 +88,58 @@ struct FZN6FixedStepAccumulator
  * ので、操作感のために補間や制限を入れる必要がある。それは操作系の
  * 都合であって、実車の特性ではない。**vehicle.json に混ぜないこと。**
  */
+/**
+ * 運転支援。**車両仕様ではなく、操作の補助**（憲法ルール18）。
+ *
+ * **必ず切れるようにしてある。** 検証は全部切った状態で行う。
+ * ここの数値に出典は要らない（実車の制御ではないため）が、
+ * **実車の挙動として語らないこと。**
+ */
+USTRUCT()
+struct FZN6DriverAssists
+{
+	GENERATED_BODY()
+
+	/** 自動変速。**既定は off。** 6MT の車なので、入れるのは補助である。 */
+	UPROPERTY(EditAnywhere)
+	bool bAutoShift = false;
+
+	/** シフトアップする回転数 [1/min]。レッドラインより下に置く。 */
+	UPROPERTY(EditAnywhere)
+	float UpshiftRpm = 6800.0f;
+
+	/** シフトダウンする回転数 [1/min]。 */
+	UPROPERTY(EditAnywhere)
+	float DownshiftRpm = 2600.0f;
+
+	/**
+	 * 変速してから次に変速できるまでの間隔 [s]。
+	 *
+	 * **これが無いと、境目で上下に振動して延々と変速し続ける。**
+	 */
+	UPROPERTY(EditAnywhere)
+	float ShiftIntervalS = 0.45f;
+};
+
+/**
+ * 視点。**すべて描画専用で、物理には一切関与しない**（憲法ルール4）。
+ *
+ * 並びは「引き → 寄り」。C キーで順に回る。
+ */
+UENUM()
+enum class EZN6View : uint8
+{
+	/** 後方からの追従。既定。 */
+	Chase,
+	/** ボンネット上。 */
+	Bonnet,
+	/** 運転席。**車体と一緒に傾く。** */
+	Cockpit,
+	/** 前バンパー。速度感がいちばん出る。 */
+	Bumper,
+	Count UMETA(Hidden),
+};
+
 USTRUCT()
 struct FZN6DriverFeel
 {
@@ -112,6 +174,61 @@ struct FZN6DriverFeel
 	float PedalRatePerS = 4.0f;
 };
 
+/**
+ * 荷重移動を車体の傾きとして見せるための設定。
+ *
+ * **これは車両仕様ではない。実車のロール角でもない。**
+ *
+ * 実車のロール角を出すには、ロール剛性が要る。しかし
+ *
+ *   - `suspension.spring_rate_*` は estimated だが、**モーションレシオが
+ *     unknown なのでホイールレートが決まらない**（vehicle.json の WARNING）
+ *   - `suspension.damper_front` / `damper_rear` は **"unknown"**
+ *   - ロールセンタ高さは vehicle.json に無い
+ *
+ * の3つが欠けており、角度を物理的に導けない。憲法ルール1は「数値が
+ * 見つからないときの正解は空欄のまま残すこと」としており、実際
+ * damper は "unknown" と明記されている。**それを勝手に埋めない。**
+ *
+ * 一方で**荷重移動そのものは official な実データ**（質量・重心高・
+ * ホイールベース・トレッド）から出ており根拠がある。そこでここでは
+ * 「荷重移動を目に見える形にする」ことだけを行い、**係数は演出値として
+ * vehicle.json の外に置く**（憲法ルール18）。
+ *
+ * データが揃ったら、これを捨てて本物のロール自由度に置き換えること
+ * （issue #19）。
+ */
+USTRUCT()
+struct FZN6BodyAttitudeFeel
+{
+	GENERATED_BODY()
+
+	/** 横 1G あたり何度傾けるか [deg/G]。**実車の値ではない。** */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float RollDegPerG = 4.5f;
+
+	/** 前後 1G あたり何度ピッチさせるか [deg/G]。**実車の値ではない。** */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float PitchDegPerG = 2.6f;
+
+	/** 応答の速さ [Hz]。実車のロール固有振動数はこのあたり。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float ResponseHz = 1.4f;
+
+	/** 減衰比。1 未満で少し揺り返す。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float DampingRatio = 0.75f;
+
+	/**
+	 * 傾きの回転中心の高さ [m]（接地面から）。
+	 *
+	 * **ロールセンタではない。** 0 にすると車体の下端が地面へめり込む
+	 * ので、見た目が破綻しない位置を選んでいるだけ。
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	float PivotHeightM = 0.35f;
+};
+
 UCLASS()
 class ZN6DIGITALTWIN_API AZN6VehicleActor : public APawn
 {
@@ -121,6 +238,7 @@ public:
 	AZN6VehicleActor();
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
@@ -142,6 +260,163 @@ public:
 	 * 憲法ルール4により両者は独立してよい。
 	 */
 	bool LoadVisualManifest(const FString& ManifestPath, FString& OutError);
+
+	/**
+	 * 地形の高さ場を読む。
+	 *
+	 * **読めなければ平地として走る。** 既定値をでっち上げるより、
+	 * 「地形が無い」ほうが誤解が無い。警告は出す。
+	 */
+	bool LoadHeightfield(const FString& HeightfieldPath, FString& OutError);
+
+	/**
+	 * 樹木と世界境界の当たり判定を読む。
+	 *
+	 * **読むのは配置データ（placement.json）であって、樹木メッシュの
+	 * コリジョンではない**（憲法ルール4）。読めなければ当たり判定なしで
+	 * 走る。地形と同じく、既定値をでっち上げない。
+	 */
+	bool LoadObstacles(const FString& PlacementPath, FString& OutError);
+
+	/** 直近のステップで接触した障害物の数。**0 なら何も触れていない。** */
+	int32 GetContactCount() const { return ContactCount; }
+
+	/**
+	 * 音を鳴らす準備をする。**読めなくても物理は動く。**
+	 *
+	 * 音は演出であって物理ではない（憲法ルール18）。ここが失敗しても
+	 * 走りは変わらない。**逆に、音が出ていても走りが変わってはいけない。**
+	 */
+	bool InitialiseAudio(const FString& RepoRoot, FString& OutError);
+
+	UZN6VehicleAudioComponent* GetAudio() const { return Audio; }
+
+	/** 路面の端までの符号つき距離 [m]。内側が正。音のクロスフェードに使う。 */
+	double GetDistanceToTrackEdgeM() const;
+
+	/** コース定義を読む。**周回計測とミニマップと音のクロスフェードに使う。** */
+	bool LoadTrack(const FString& TrackJsonPath, FString& OutError);
+
+	const ZN6::FTrackEdge& GetTrack() const { return TrackEdge; }
+	bool IsTrackLoaded() const { return bTrackEdgeLoaded; }
+
+	// --- セッションの進行 ---------------------------------------------------
+	//
+	// **ここは物理ではない。** 時間を測って状態を切り替えるだけ。
+
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	bool StartCountdown() { return Race.StartCountdown(); }
+
+	/** カウントダウン無しで走り出す（フリー走行）。 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	bool StartFreeRun() { return Race.StartFreeRun(); }
+
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	bool PauseRace() { return Race.Pause(); }
+
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	bool ResumeRace() { return Race.Resume(); }
+
+	/** メニューへ戻す。**車も出発点へ戻す。** */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Race")
+	void ReturnToMenu();
+
+	const ZN6::FRaceDirector& GetRace() const { return Race; }
+
+	/** 画面へ渡す値を作る。**一方向。UI からは書き戻さない。** */
+	ZN6::FHudSnapshot MakeHudSnapshot() const;
+
+	/**
+	 * セッティングを適用する。**物理モデルを作り直す。**
+	 *
+	 * 走行中に呼ぶことは想定していない（メニューから呼ぶ）。
+	 * 車の状態は保つが、姿勢は新しいばねで釣り合わせ直す。
+	 */
+	void ApplySetup(const ZN6::FCarSetup& InSetup);
+
+	const ZN6::FCarSetup& GetSetup() const { return Setup; }
+	const ZN6::FSetupLimits& GetSetupLimits() const { return SetupLimits; }
+
+	/** メニューを開く / 閉じる。 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|UI")
+	void ToggleMenu();
+
+	/**
+	 * ボディカラーを変える。**演出であって車両仕様ではない**（ルール18）。
+	 *
+	 * 塗るスロットは、元モデルの塗装色と一致するものだけ
+	 * （`ZN6::IsPaintSlot`）。ガラスや灯火まで塗ると単色の塊になる。
+	 */
+	void SetBodyColour(const FLinearColor& Colour);
+
+	int32 GetPaintIndex() const { return PaintIndex; }
+	void SetPaintIndex(int32 Index);
+
+	/** 車体が乗っている地面の高さ [m]（4輪の接地点の平均）。 */
+	double GetGroundHeightM() const { return GroundHeightM; }
+
+	/**
+	 * 接地モデル（上下・ピッチ・ロール）。
+	 *
+	 * **これが入るまで、車体は地面の高さに置かれているだけだった。**
+	 * 重力で落ちていないので、何にも支えられていなかった。今は
+	 * 車輪が地面を押し、押し返された力で車体が支えられている。
+	 */
+	const ZN6::FRideState& GetRideState() const { return RideState; }
+	const ZN6::FRideOutputs& GetRideOutputs() const { return RideOutputs; }
+	const ZN6::FRideModel& GetRideModel() const { return Ride; }
+	bool IsRideReady() const { return bRideReady; }
+
+	/**
+	 * 接地モデルを使うか。**切れるようにしてある**（憲法ルール18）。
+	 *
+	 * 切ると、地形の傾きを幾何から出す以前の見せ方に戻る。
+	 * 検証のためであって、通常は入れたままでよい。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Physics")
+	void SetUseRideModel(bool bEnabled) { bUseRideModel = bEnabled; }
+
+	UFUNCTION(BlueprintPure, Category = "ZN6|Physics")
+	bool IsUsingRideModel() const { return bUseRideModel && bRideReady; }
+
+	/**
+	 * 接地モデルの力をタイヤの垂直荷重として使うか。
+	 *
+	 * **入れると、浮いた車輪のグリップが消える。** 切ると準静的な式に戻る
+	 * （常に正の荷重なので、段差で跳ねてもタイヤが効いたままになる）。
+	 *
+	 * **入れるとラップタイムが変わる。** 左右の荷重配分がばねレートから
+	 * 導出されるようになり、`roll_stiffness_distribution_front`（assumed
+	 * 0.600）ではなくなるため。参照値（Reference/*.json）は準静的のままで、
+	 * こちらの影響を受けない。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Physics")
+	void SetRideDrivesTyreLoads(bool bEnabled) { bRideDrivesTyreLoads = bEnabled; }
+
+	/** 自動変速。**補助であって車両仕様ではない**（ルール18）。切れる。 */
+	UFUNCTION(BlueprintCallable, Category = "ZN6|Assist")
+	void SetAutoShift(bool bEnabled) { Assists.bAutoShift = bEnabled; }
+
+	UFUNCTION(BlueprintPure, Category = "ZN6|Assist")
+	bool IsAutoShiftEnabled() const { return Assists.bAutoShift; }
+
+	UFUNCTION(BlueprintPure, Category = "ZN6|Physics")
+	bool IsRideDrivingTyreLoads() const
+	{
+		return bRideDrivesTyreLoads && IsUsingRideModel();
+	}
+
+	/**
+	 * 今いる地面の上で釣り合い姿勢に落ち着かせる。
+	 *
+	 * **位置を変えたら呼ぶこと。** 呼ばないと、前の場所の姿勢のまま
+	 * 新しい地面に置かれ、そこから落ちたり跳ねたりする。
+	 */
+	void SettleRide();
+
+	/** 地形による車体の傾き [rad]。**演出ではなく地形そのもの。** */
+	double GetTerrainPitchRad() const { return TerrainPitchRad; }
+	double GetTerrainRollRad() const { return TerrainRollRad; }
 
 	/** 物理だけを1フレームぶん進める（描画を伴わない。テスト用）。 */
 	void AdvancePhysics(double FrameDeltaS);
@@ -188,6 +463,10 @@ public:
 	/** 最大舵角 [rad]。vehicle.json の最小回転半径から導いた値。 */
 	double GetMaxSteerRad() const { return MaxSteerRad; }
 
+	/** 描画用の車体姿勢 [rad]。**物理には存在しない量。** */
+	double GetVisualRollRad() const { return VisualRollRad; }
+	double GetVisualPitchRad() const { return VisualPitchRad; }
+
 	// --- テスト用の入り口 ---------------------------------------------------
 	//
 	// **入力の変換は PlayerController 無しでも検査できるようにする。**
@@ -195,10 +474,57 @@ public:
 	// 舵角の即時最大化のような壊れ方が誰にも気づかれない。
 	void ShiftUpForTest() { ShiftUp(); }
 	void ShiftDownForTest() { ShiftDown(); }
+	void SelectGearForTest(int32 GearIndex) { SetGearAbsolute(GearIndex); }
+	int32 GetGearIndexForTest() const { return Control.GearIndex; }
+	int32 GetDisplayGearForTest() const { return DisplayGear(); }
+	void GearAxisForTest(float Value) { InputGearAbsolute(Value); }
+	void SetClutchInputForTest(float Value) { RawClutch = Value; }
+	void SetAnalogInputForTest(bool bAnalog) { bAnalogInput = bAnalog; }
+	void CycleViewForTest() { CycleView(); }
+	EZN6View GetViewForTest() const { return View; }
+	void SetViewForTest(EZN6View InView) { View = InView; ApplyView(); }
+	bool IsAnalogInputForTest() const { return bAnalogInput; }
+	double GetSteerRadForTest() const { return Control.SteerRad; }
 	void SetSteerInputForTest(float Value) { RawSteer = Value; }
 	void SetThrottleInputForTest(float Value) { RawThrottle = Value; }
 	void SetBrakeInputForTest(float Value) { RawBrake = Value; }
 	void ApplyDriverInputForTest(float DeltaSeconds) { ApplyDriverInput(DeltaSeconds); }
+	void SetAttitudeFeelForTest(const FZN6BodyAttitudeFeel& InFeel) { AttitudeFeel = InFeel; }
+
+	// --- リプレイ / ゴースト -----------------------------------------------
+	//
+	// **遊びの機能である以上に、検証の道具**（`Docs/SPEC_GT7_GAP.md` §9）。
+	// 操作を固定して条件だけを変えれば、「セッティングが効いたのか運転が
+	// 良かったのか」を分離できる。
+
+	/** 今の条件（コース・車両・セッティング・刻み）で見出しを作る。 */
+	ZN6::FReplayHeader MakeReplayHeader() const;
+
+	/** 記録を始める。**すでに録っていれば録り直しになる。** */
+	void StartRecording();
+	void StopRecording() { Recorder.Stop(); }
+	bool IsRecording() const { return Recorder.IsActive(); }
+
+	/**
+	 * 記録した操作を再生する。
+	 *
+	 * 条件が違えば `OutError` に理由を入れて false。**黙って再生しない**
+	 * （別の車・別のコースの記録を再生した軌跡は「同じ操作をしたときの
+	 * 姿」ではない）。
+	 */
+	bool StartPlayback(const ZN6::FReplay& InReplay, FString& OutError);
+	void StopPlayback();
+	bool IsPlayingBack() const { return Player.IsActive(); }
+
+	/** ゴーストを出す。空の記録を渡すと消える。 */
+	void SetGhost(const ZN6::FReplay& InGhost);
+	void ClearGhost();
+	bool HasGhost() const { return GhostReplay.Ghost.Num() > 0; }
+	double GhostLapTimeS() const { return GhostReplay.Header.LapTimeS; }
+
+	const ZN6::FReplay& GetRecordedForTest() const { return Recorder.Peek(); }
+	const ZN6::FReplay& GetGhostForTest() const { return GhostReplay; }
+	FString GetTrackKeyForTest() const { return LoadedTrackKey; }
 
 protected:
 	/** 追従カメラ。**描画専用で、物理には一切関与しない。** */
@@ -208,13 +534,80 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
 	TObjectPtr<UCameraComponent> ChaseCamera;
 
+	/**
+	 * 運転席の視点。**車体メッシュに付ける。**
+	 *
+	 * 付ける先が要点である。車体メッシュは荷重移動で傾く（`AttitudeFeel`）
+	 * ので、そこに付ければ**カメラも一緒に傾く。** ルートに付けると、
+	 * モデルが計算しているロールとピッチが画面に一切出ない。
+	 *
+	 * **位置は演出値である**（憲法ルール18）。`vehicle.json` の
+	 * `dimensions` にアイポイントの項目が無く、公表もされていない
+	 * （`Docs/SPEC_GT7_GAP.md` §8.2）。**測った値のふりをしない。**
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<UCameraComponent> CockpitCamera;
+
+	/** ボンネット視点。**位置は演出値。** */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<UCameraComponent> BonnetCamera;
+
+	/** バンパー視点。**位置は演出値。** */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<UCameraComponent> BumperCamera;
+
 	/** 操作感の設定。**車両仕様ではない**（憲法ルール18）。 */
 	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
 	FZN6DriverFeel DriverFeel;
 
+	/**
+	 * アナログ機器（ハンドル・パッドのトリガ）で運転しているか。
+	 *
+	 * **自動で切り替えない。** 切り替えると、出たラップタイムが
+	 * どちらの操作系で出たものか記録に残らなくなる（憲法ルール3の
+	 * 「辻褄合わせ」に近い形で、比較できない数字が混ざる）。
+	 * `-ZN6Analog` かメニューから明示的に入れる。
+	 *
+	 * 何が変わるか（`ApplyDriverInput`）:
+	 *
+	 *   - ペダルと操舵の**平滑化を切る**。アナログ機器は踏み込み量を
+	 *     持っているので、時間をかけて寄せると**ある情報を捨てる**
+	 *     ことになる（ペダル 0.25 秒遅れ、操舵フルロック 0.40 秒遅れ）
+	 *   - **速度による舵角の絞りを切る**。絞ると、ハンドルの同じ角度が
+	 *     速度によって違う舵角を意味してしまう（100 km/h で 25.5 度 ->
+	 *     11.3 度）。これはハンドルを持っている人にとっては壊れた挙動
+	 *
+	 * どちらもキーボード（0 か 1 しか出せない）には正しい補助である。
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
+	bool bAnalogInput = false;
+
+	/**
+	 * 今の視点。
+	 *
+	 * **追従カメラでも車体の傾きを一部だけ反映する。**
+	 * まったく反映しないと、モデルが計算している荷重移動が画面に
+	 * 出ない（`Docs/SPEC_GT7_GAP.md` §9 の3位）。全部反映すると、
+	 * スピン時に world ごと回って何が起きているか分からなくなる。
+	 * **割合は演出値である。**
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Visual")
+	EZN6View View = EZN6View::Chase;
+
+	/** 追従カメラに車体の傾きをどれだけ乗せるか [-]。**演出値。** */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Visual")
+	float ChaseAttitudeBlend = 0.35f;
+
 	/** 画面にテレメトリを出すか。 */
 	UPROPERTY(EditAnywhere, Category = "ZN6|Driver")
-	bool bShowTelemetry = true;
+	// **既定は off。** HUD が同じ情報を出すようになったので、重ねると
+	// ミニマップに被って読めなくなる（実際に撮った画面でそうなっていた）。
+	// 数値を生で見たいときだけ入れる。
+	bool bShowTelemetry = false;
+
+	/** 荷重移動の可視化。**車両仕様ではない**（憲法ルール18）。 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Attitude")
+	FZN6BodyAttitudeFeel AttitudeFeel;
 
 private:
 	// --- 入力ハンドラ -------------------------------------------------------
@@ -225,6 +618,90 @@ private:
 	void InputHandbrake(float Value);
 	void ShiftUp();
 	void ShiftDown();
+
+	/** 視点を次へ回す。 */
+	void CycleView();
+
+	/** 今の視点だけを有効にする。 */
+	void ApplyView();
+
+	/** テレメトリ用の視点名。 */
+	FString ViewLabel() const;
+
+	/**
+	 * 段を**絶対値で**入れる。H パターンシフターの口。
+	 *
+	 * シーケンシャル（パドル・ボタン）の口である ShiftUp / ShiftDown は
+	 * 「1段上げる／下げる」という**相対**の命令で、H パターンが持つ
+	 * 「今 3速に入っている」という情報を入れられない。相対の口に絶対の
+	 * 情報を入れると、取りこぼしが起きたときに**シフターの位置と
+	 * ゲーム内の段がずれたまま戻らない。**
+	 */
+	void SetGearAbsolute(int32 GearIndex);
+
+	// H パターン／キーボード直接指定の受け口
+	void SelectGear1();
+	void SelectGear2();
+	void SelectGear3();
+	void SelectGear4();
+	void SelectGear5();
+	void SelectGear6();
+	void SelectGearNeutral();
+	void SelectGearReverse();
+
+	/**
+	 * GameInput のパターンシフターの軸。
+	 *
+	 * **段の番号がそのまま軸の値で来る**（0 = ニュートラル、正 = 前進、
+	 * 負 = 後退）。押した瞬間ではなく「今どこに入っているか」が
+	 * 毎フレーム来るので、変化したときだけ入れ替える。
+	 */
+	void InputGearAbsolute(float Value);
+
+	/**
+	 * R -> N -> 1 -> 2 ... 6 の並びでの位置。
+	 *
+	 * **前進段の添字とは別物。** シーケンシャルで上げ下げするときだけ
+	 * この並びを使う。`GearIndex` は前進 0..5 と N(-1) / R(-2) で、
+	 * 連番になっていない。
+	 */
+	static int32 GearToSequence(int32 GearIndex);
+	static int32 SequenceToGear(int32 Sequence);
+
+	/** 画面に出す段。**R = -1、N = 0、前進 = 1..6。** */
+	int32 DisplayGear() const;
+
+	/** テレメトリ用の段の表示（"R" / "N" / "3速"）。 */
+	FString GearLabel() const;
+
+	/** ゴーストの車体に、自車と同じメッシュと半透明マテリアルを入れる。 */
+	void PrepareGhostMesh();
+
+public:
+	/**
+	 * 実データ（vehicle.json / コース / 音）の置き場所。
+	 *
+	 * **エディタと exe で場所が違う。**
+	 *
+	 *   エディタ: `<repo>/`（プロジェクトは `<repo>/Unreal/ZN6DigitalTwin/`）
+	 *   exe     : `<パッケージ>/ZN6DigitalTwin/ZN6Data/`
+	 *
+	 * `ProjectDir()/../..` だけを見ていたときは、**exe にすると
+	 * パッケージの外を指して何も読めなかった**（車が動かない）。
+	 * 同梱した側を先に探し、無ければリポジトリを見る。
+	 */
+	static FString DataRoot();
+
+private:
+
+	/** 起動オプション（`-ZN6Record` / `-ZN6Replay=` / `-ZN6Ghost=`）を見る。 */
+	void SetUpReplayFromCommandLine();
+
+	/** 周が1つ終わったとき。**物理ステップの中から呼ぶ。** */
+	void OnLapCompleted();
+
+	/** ゴーストの車体を今の時刻の場所へ置く。**描画だけ。** */
+	void UpdateGhostVisual();
 
 	/** 生の入力を、時間をかけて Control へ反映する。 */
 	void ApplyDriverInput(float DeltaSeconds);
@@ -237,6 +714,16 @@ private:
 	float RawSteer = 0.0f;
 	float RawClutch = 0.0f;
 	float RawHandbrake = 0.0f;
+
+	/**
+	 * パターンシフターの軸の前回値。
+	 *
+	 * **毎フレーム同じ値が来る**ので、変わったときだけ段を入れ替える。
+	 * 毎フレーム入れ直すと、キーボードで入れた段を軸が上書きし続けて
+	 * 変速できなくなる。
+	 */
+	float LastGearAxis = 0.0f;
+	bool bHasGearAxis = false;
 
 protected:
 	/** **描画専用。** 物理はこのコンポーネントを一切参照しない。 */
@@ -254,6 +741,16 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "ZN6|Physics")
 	FZN6FixedStepAccumulator Accumulator;
+
+	/** 運転支援。**車両仕様ではない。既定は全部 off。** */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Assist")
+	FZN6DriverAssists Assists;
+
+	/** 最後に変速してからの時間 [s]。連続変速を防ぐ。 */
+	float SinceShiftS = 0.0f;
+
+	/** 自動変速を1ステップぶん働かせる。**入っているときだけ。** */
+	void TickAutoShift(float DeltaSeconds);
 
 private:
 	ZN6::FVehicleData VehicleData;
@@ -283,6 +780,200 @@ private:
 	 * **この値を物理へ戻さないこと。** 憲法ルール4（物理と表示の分離）。
 	 */
 	double VisualWheelAngleRad[ZN6::WheelCount] = {};
+
+	/**
+	 * **描画専用の車体姿勢 [rad] とその角速度。**
+	 *
+	 * 物理が出した ax / ay を入力とする2次系。**物理へは戻さない。**
+	 * 戻すと、演出値である減衰・比例係数が荷重移動を変え、検証済みの
+	 * 0-100km/h や制動距離を汚染する（憲法ルール3が禁じる辻褄合わせ）。
+	 */
+	double VisualRollRad = 0.0;
+	double VisualRollRateRads = 0.0;
+	double VisualPitchRad = 0.0;
+	double VisualPitchRateRads = 0.0;
+
+	/** 姿勢を Dt 進める（固定刻みの中で呼ぶ）。 */
+	void AdvanceVisualAttitude(double DtS);
+
+	/**
+	 * 車が乗っている地面を調べ、高さ・傾き・斜面重力を更新する。
+	 *
+	 * **4輪の接地点を使う。** 重心1点だと、片輪だけ段差に乗った状況で
+	 * 車体が傾かない。
+	 */
+	void SampleGround();
+
+	ZN6::FHeightfield Heightfield;
+	bool bHeightfieldLoaded = false;
+
+	/**
+	 * コース中心線。**物理へは返さない。**
+	 * 音のクロスフェード・周回計測・ミニマップが読む。
+	 */
+	ZN6::FTrackEdge TrackEdge;
+	bool bTrackEdgeLoaded = false;
+
+	/** セッションの進行役。**物理には触らない。** */
+	ZN6::FRaceDirector Race;
+
+	/**
+	 * タイヤ痕。**絵であって物理ではない**（ルール18）。
+	 * 痕を残してもグリップは変わらない。
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Visual")
+	TObjectPtr<UZN6TyreMarkComponent> TyreMarks;
+
+	/** 走行中の画面。**入力は奪わない**（HitTestInvisible）。 */
+	TSharedPtr<class SZN6Hud> Hud;
+
+	/** メニュー。**開いている間だけ入力を取る。** */
+	TSharedPtr<class SZN6Menu> Menu;
+
+	/**
+	 * 入力モードをメニューの開閉に合わせる。
+	 *
+	 * **これが無いとメニューが一切操作できない。** -game では
+	 * PlayerController が入力を持っていくので、ビューポートに足しただけの
+	 * Slate ウィジェットにはキーが届かない。
+	 */
+	void SyncInputModeToMenu();
+
+	/** まだ入力モードを当てられていない（PlayerController が居なかった）。 */
+	bool bInputModeDirty = true;
+	bool bInputModeAppliedForOpen = false;
+
+	/**
+	 * 起動して一定時間後に画面を撮って終了する。
+	 *
+	 *     UnrealEditor.exe ... -game -ZN6Shot=8 -ZN6ShotName=menu
+	 *
+	 * **これが無いと、画面に出るものを誰も確認できない。**
+	 * SceneCapture2D（Scripts/screenshot_level.py）は 3D シーンしか撮れず、
+	 * **Slate で描いている HUD とメニューは1ピクセルも写らない。**
+	 * そのせいで「メニューが動かない」ことに気づけなかった。
+	 *
+	 * 撮ったら終了する。人が見ていない起動を残さないため。
+	 */
+	void TickAutoScreenshot(float DeltaSeconds);
+
+	/** `-ZN6AutoDrive`。**確認用の自動走行。** 人が居なくても HUD を撮れる。 */
+	bool bAutoDrive = false;
+	bool bAutoDriveChecked = false;
+
+	float AutoShotDelayS = -1.0f;
+	float AutoShotElapsedS = 0.0f;
+	bool bAutoShotTaken = false;
+
+	/**
+	 * 塗装スロットの動的マテリアル。**車体の色を変えるのに使う。**
+	 * 元モデルの塗装色と一致したスロットだけがここに入る。
+	 */
+	UPROPERTY(Transient)
+	TArray<UMaterialInstanceDynamic*> PaintMaterials;
+	int32 PaintIndex = 0;
+
+	/** 塗装スロットを探して動的マテリアルを作る。**1回だけ。** */
+	void PreparePaintMaterials();
+
+	/** 今のセッティングと、その調整範囲。 */
+	ZN6::FCarSetup Setup;
+
+	// --- リプレイ ---------------------------------------------------------
+	ZN6::FReplayRecorder Recorder;
+	ZN6::FReplayPlayer Player;
+
+	/** ゴーストの記録。**軌跡だけを使う**（操作は要らない）。 */
+	ZN6::FReplay GhostReplay;
+
+	/** ゴーストの車体。**当たり判定は持たない。すり抜ける。** */
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> GhostMesh;
+
+	/** どのコースを読んだか。記録の照合に使う。 */
+	FString LoadedTrackKey;
+
+	/** 読んだ `vehicle.json` の場所。記録の照合に使う。 */
+	FString LoadedVehiclePath;
+
+	/**
+	 * 自己ベストが出たらゴーストとして保存するか。
+	 *
+	 * **既定で入れる。** メニューを触らなくても「前の自分」と走れる
+	 * ようにしておかないと、この機能は誰にも使われない。
+	 */
+	UPROPERTY(EditAnywhere, Category = "ZN6|Replay")
+	bool bAutoGhost = true;
+
+	/** 直前に見た完了周回数。ベスト更新の検出に使う。 */
+	int32 LastSeenLapCount = 0;
+	ZN6::FSetupLimits SetupLimits;
+	bool bSetupLimitsReady = false;
+
+	/** 画面をビューポートへ出す / 片付ける。 */
+	void CreateHud();
+	void DestroyHud();
+
+	/**
+	 * 音。**物理の後に更新する。**
+	 *
+	 * ここが物理へ書き戻すことは無い。`ZN6.Audio.音は物理に影響しない`
+	 * がそれを毎回確かめる。
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "ZN6|Audio")
+	TObjectPtr<UZN6VehicleAudioComponent> Audio;
+
+	/**
+	 * 接地モデル。**Vehicle.Step の後**に解く。
+	 *
+	 * FVehicle が前後・左右・ヨーを、こちらが上下・ピッチ・ロールを解く。
+	 * **繋がっているのは接地力だけ。**
+	 */
+	ZN6::FRideModel Ride;
+	ZN6::FRideState RideState;
+	ZN6::FRideOutputs RideOutputs;
+	bool bRideReady = false;
+	bool bUseRideModel = true;
+
+	/**
+	 * 接地モデルの力をタイヤの垂直荷重に使う。**既定で入れる。**
+	 *
+	 * 入れないと「車輪が浮く」のが見た目と接地判定だけになり、
+	 * 浮いた輪のグリップが消えない。物理として不完全なので既定を on にする。
+	 * 参照値は `FVehicle::Step` の既定（準静的）のままなので影響しない。
+	 */
+	bool bRideDrivesTyreLoads = true;
+
+	/** 前ステップの接地力。**1ステップ遅らせて渡す。** */
+	double PreviousContactLoadsN[ZN6::WheelCount] = {};
+	bool bHasPreviousContactLoads = false;
+
+	/** 各車輪の下の地面の高さ [m]。SampleGround が更新する。 */
+	double WheelGroundM[ZN6::WheelCount] = {};
+
+	/**
+	 * 車輪メッシュの基準位置 [cm]（サスペンションの動きを足す前）。
+	 *
+	 * **レベル側で設定済みの位置を上書きしないため**に、最初の1回だけ
+	 * 読み取って覚えておく。毎フレーム SetRelativeLocation で上書きすると、
+	 * manifest を読めなかったときに車輪が原点へ飛ぶ。
+	 */
+	FVector WheelBaseLocationCm[ZN6::WheelCount] = {};
+	bool bWheelBaseCaptured = false;
+
+	/** 障害物。**Vehicle.Step の後**に解く。 */
+	ZN6::FObstacleField Obstacles;
+	ZN6::FCollisionBody CollisionBody;
+	bool bObstaclesLoaded = false;
+	int32 ContactCount = 0;
+
+	/** 接地面の状態。SampleGround が更新する。 */
+	double GroundHeightM = 0.0;
+	double TerrainPitchRad = 0.0;
+	double TerrainRollRad = 0.0;
+	double SlopeGxMps2 = 0.0;
+	double SlopeGyMps2 = 0.0;
+	double NormalScale = 1.0;
 
 	/**
 	 * 最大舵角 [rad]。

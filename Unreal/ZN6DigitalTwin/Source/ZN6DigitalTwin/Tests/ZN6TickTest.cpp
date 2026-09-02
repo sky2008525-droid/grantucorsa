@@ -14,6 +14,7 @@
 #include "Engine/World.h"
 #include "HAL/PlatformTime.h"
 
+#include "Physics/ZN6Terrain.h"
 #include "Physics/ZN6Units.h"
 #include "ZN6VehicleActor.h"
 
@@ -50,6 +51,12 @@ namespace
 			Test.AddError(FString::Printf(TEXT("物理モデルを初期化できない: %s"), *Error));
 			return nullptr;
 		}
+
+		// **走れる状態にしてから返す。**
+		// 既定はメニューで、そこでは操作を受け付けない（カウントダウン前に
+		// 走り出さないため）。ここを忘れると「アクセルを踏んでも進まない」
+		// テストが落ちる。スタートの門そのものは ZN6.Race で検査する。
+		Actor->StartFreeRun();
 		return Actor;
 	}
 
@@ -495,7 +502,13 @@ bool FZN6DriverInputIsSane::RunTest(const FString& Parameters)
 	{
 		Actor->ShiftDownForTest();
 	}
-	TestEqual(TEXT("下限を下回って変速しない"), Actor->GetControl().GearIndex, 0);
+	// **下限は R。** 並びは R -> N -> 1 ... 6（H パターン対応で N と R が
+	// 入った）。ここが 1速で止まっていたときは、シフターを繋いでも
+	// バックに入れられなかった。
+	TestEqual(TEXT("下限を下回って変速しない"),
+	          Actor->GetControl().GearIndex, ZN6::GearReverse);
+	TestTrue(TEXT("下限も選べる段の中にある"),
+	         ZN6::IsSelectableGear(Actor->GetControl().GearIndex));
 
 	// --- 舵角が一瞬で最大にならないか ---
 	//
@@ -612,6 +625,352 @@ bool FZN6CarActuallyDrives::RunTest(const FString& Parameters)
 		*FString::Printf(TEXT("ブレーキで減速する（%.1f -> %.1f m/s）"),
 		                 BeforeBrakeMps, AfterBrakeMps),
 		AfterBrakeMps < BeforeBrakeMps);
+
+	DestroyWorld(World);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// 車体姿勢（荷重移動の可視化）
+// ---------------------------------------------------------------------------
+//
+// **これは実車のロール角ではない。** ロール剛性を出すのに要る
+// モーションレシオ・減衰・ロールセンタ高さが揃っていないため、角度そのものは
+// 検査しない。検査するのは**向きと、物理へ戻っていないこと。**
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6BodyAttitudeFollowsLoadTransfer,
+	"ZN6.Tick.車体姿勢が荷重移動に追従し物理へ戻らない",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6BodyAttitudeFollowsLoadTransfer::RunTest(const FString& Parameters)
+{
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	constexpr float FrameDt = 1.0f / 60.0f;
+
+	// --- 左旋回で外側（右）へ傾くか ---
+	Actor->SetPhysicsState(Actor->MakeInitialState(80.0 / 3.6, 3));
+	Actor->SetControl(MakeCorneringControl());        // steer +0.05 = 左旋回
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		Actor->AdvancePhysics(FrameDt);
+	}
+
+	const double Ay = Actor->GetPhysicsOutputs().AyMps2;
+	const double Roll = Actor->GetVisualRollRad();
+
+	TestTrue(
+		*FString::Printf(TEXT("左旋回で横加速度が正（%.2f m/s^2）"), Ay),
+		Ay > 0.5);
+	// **符号が逆だと内側へ傾く。**
+	//
+	// UE の正の Roll は右側が下がる。左旋回では外側（右）が下がるので正。
+	// **ここは一度間違えた。** 私が「負が外側」と思い込み、その思い込みを
+	// そのまま assert に書いたので、内側へ傾いたままテストが通った。
+	// 実際に走らせて指摘されるまで気づけなかった。
+	TestTrue(
+		*FString::Printf(TEXT("左旋回では外側（右＝正のロール）へ傾く（%.3f rad）"), Roll),
+		Roll > 0.001);
+
+	// --- 加速でノーズが上がるか ---
+	Actor->ResetToStart();
+	Actor->SetThrottleInputForTest(1.0f);
+	for (int32 Frame = 0; Frame < 180; ++Frame)
+	{
+		Actor->ApplyDriverInputForTest(FrameDt);
+		Actor->AdvancePhysics(FrameDt);
+	}
+	TestTrue(
+		*FString::Printf(TEXT("加速でノーズが上がる（ピッチ %.3f rad、ax %.2f）"),
+		                 Actor->GetVisualPitchRad(), Actor->GetPhysicsOutputs().AxMps2),
+		Actor->GetVisualPitchRad() > 0.001);
+
+	// --- 姿勢が物理へ戻っていないこと ---
+	//
+	// **憲法ルール3の検査。** 姿勢の係数は演出値（実車由来ではない）なので、
+	// これが荷重移動へ影響すると、検証済みの 0-100km/h や制動距離が
+	// 演出値で変わってしまう。
+	//
+	// 姿勢の設定を極端に変えて同じ走行を再現し、物理がビット単位で
+	// 変わらないことを見る。
+	auto RunWithFeel = [this](float RollDegPerG, ZN6::FVehicleState& OutState) -> bool
+	{
+		UWorld* Local = nullptr;
+		AZN6VehicleActor* Car = SpawnInitialised(*this, Local);
+		if (Car == nullptr)
+		{
+			DestroyWorld(Local);
+			return false;
+		}
+		FZN6BodyAttitudeFeel Feel;
+		Feel.RollDegPerG = RollDegPerG;
+		Feel.PitchDegPerG = RollDegPerG;
+		Car->SetAttitudeFeelForTest(Feel);
+
+		Car->SetPhysicsState(Car->MakeInitialState(80.0 / 3.6, 3));
+		Car->SetControl(MakeCorneringControl());
+		for (int32 Frame = 0; Frame < 120; ++Frame)
+		{
+			Car->AdvancePhysics(1.0 / 60.0);
+			Car->SyncVisualToPhysics();
+		}
+		OutState = Car->GetPhysicsState();
+		DestroyWorld(Local);
+		return true;
+	};
+
+	ZN6::FVehicleState Mild, Wild;
+	if (!RunWithFeel(0.0f, Mild) || !RunWithFeel(45.0f, Wild))
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	TestEqual(TEXT("姿勢の設定を変えても vx が変わらない"), Wild.VxMps, Mild.VxMps);
+	TestEqual(TEXT("姿勢の設定を変えても vy が変わらない"), Wild.VyMps, Mild.VyMps);
+	TestEqual(TEXT("姿勢の設定を変えてもヨーレートが変わらない"),
+	          Wild.YawRateRads, Mild.YawRateRads);
+
+	DestroyWorld(World);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// 地形（接地と斜面の重力）
+// ---------------------------------------------------------------------------
+//
+// **符号を推測で書かない。** 下り坂で前へ加速する、上り坂で減速する、
+// という向きは、間違えても「それらしく」動いてしまう。
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6TerrainAffectsTheCar,
+	"ZN6.Tick.地形が車に効く",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6TerrainAffectsTheCar::RunTest(const FString& Parameters)
+{
+	// --- 斜面の重力（Python 版と同じ式か）---
+	{
+		double Forward = 0.0;
+		double Left = 0.0;
+		double Scale = 0.0;
+
+		ZN6::BodyGravity(0.0, 0.0, 0.0, Forward, Left, Scale);
+		TestEqual(TEXT("平地では前後の重力成分がゼロ"), Forward, 0.0);
+		TestEqual(TEXT("平地では左右の重力成分がゼロ"), Left, 0.0);
+		TestEqual(TEXT("平地では法線係数が 1"), Scale, 1.0);
+
+		// dz/dx < 0 は「前方が低い」= 下り坂
+		ZN6::BodyGravity(-0.20, 0.0, 0.0, Forward, Left, Scale);
+		TestTrue(*FString::Printf(TEXT("下り坂で前へ加速する（%.3f m/s^2）"), Forward),
+		         Forward > 0.0);
+
+		double UphillForward = 0.0;
+		ZN6::BodyGravity(0.20, 0.0, 0.0, UphillForward, Left, Scale);
+		TestTrue(*FString::Printf(TEXT("上り坂で後ろ向きになる（%.3f m/s^2）"), UphillForward),
+		         UphillForward < 0.0);
+
+		// **保存則。** 面内成分と法線成分を合成すると g に戻る。
+		ZN6::BodyGravity(0.5, 0.3, 0.7, Forward, Left, Scale);
+		const double Tangential = FMath::Sqrt(Forward * Forward + Left * Left);
+		const double Normal = ZN6::GravityMps2 * Scale;
+		TestTrue(
+			*FString::Printf(TEXT("成分を合成すると g に戻る（%.9f）"),
+			                 FMath::Sqrt(Tangential * Tangential + Normal * Normal)),
+			FMath::Abs(FMath::Sqrt(Tangential * Tangential + Normal * Normal)
+			           - ZN6::GravityMps2) < 1e-9);
+	}
+
+	// --- 高さ場 ---
+	const FString HeightfieldPath =
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("../..")) /
+		TEXT("Tracks/Export/physics_test_track/heightfield.json");
+
+	ZN6::FHeightfield Field;
+	FString Error;
+	if (!Field.LoadFromFile(HeightfieldPath, Error))
+	{
+		AddError(FString::Printf(TEXT("高さ場を読めない: %s"), *Error));
+		return false;
+	}
+
+	// **走行域は平ら。** 物理が平面3自由度である以上、行ける場所は平面。
+	for (double X = -100.0; X <= 420.0; X += 40.0)
+	{
+		for (double Y = 0.0; Y <= 110.0; Y += 20.0)
+		{
+			const double Height = Field.HeightAt(X, Y);
+			TestTrue(
+				*FString::Printf(TEXT("走行域 (%.0f, %.0f) が平ら（%.4f m）"), X, Y, Height),
+				FMath::Abs(Height + 0.05) < 1e-6);
+		}
+	}
+
+	// 遠景には起伏がある（無ければ「地形に沿う」検査に意味が無い）
+	double Lowest = 1e9;
+	double Highest = -1e9;
+	for (double X = -600.0; X <= 900.0; X += 300.0)
+	{
+		for (double Y = -350.0; Y <= 500.0; Y += 200.0)
+		{
+			const double Height = Field.HeightAt(X, Y);
+			Lowest = FMath::Min(Lowest, Height);
+			Highest = FMath::Max(Highest, Height);
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("遠景に起伏がある（%.2f m）"), Highest - Lowest),
+	         Highest - Lowest > 1.0);
+
+	// --- 車体が地面の高さに乗るか ---
+	UWorld* World = nullptr;
+	AZN6VehicleActor* Actor = SpawnInitialised(*this, World);
+	if (Actor == nullptr)
+	{
+		DestroyWorld(World);
+		return false;
+	}
+
+	const FString ManifestPath =
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("../..")) /
+		TEXT("Vehicles/ZN6/Export/manifest.json");
+	Actor->LoadVisualManifest(ManifestPath, Error);
+
+	if (!Actor->LoadHeightfield(HeightfieldPath, Error))
+	{
+		AddError(FString::Printf(TEXT("Actor が高さ場を読めない: %s"), *Error));
+		DestroyWorld(World);
+		return false;
+	}
+
+	// コース上（平ら）
+	ZN6::FVehicleState OnTrack = Actor->MakeInitialState(0.0, 0);
+	OnTrack.XM = 100.0;
+	OnTrack.YM = 20.0;
+	Actor->SetPhysicsState(OnTrack);
+	Actor->AdvancePhysics(1.0 / 60.0);
+	TestTrue(
+		*FString::Printf(TEXT("コース上では地面が平ら（%.4f m）"),
+		                 Actor->GetGroundHeightM()),
+		FMath::Abs(Actor->GetGroundHeightM() + 0.05) < 1e-3);
+	TestTrue(TEXT("コース上では地形の傾きがゼロ"),
+	         FMath::Abs(Actor->GetTerrainPitchRad()) < 1e-6
+	         && FMath::Abs(Actor->GetTerrainRollRad()) < 1e-6);
+
+	// 起伏の上（**ここで高さが変わらなければ、地形が効いていない**）
+	ZN6::FVehicleState OffTrack = Actor->MakeInitialState(0.0, 0);
+	OffTrack.XM = -500.0;
+	OffTrack.YM = -300.0;
+	Actor->SetPhysicsState(OffTrack);
+	Actor->AdvancePhysics(1.0 / 60.0);
+
+	const double OffHeight = Actor->GetGroundHeightM();
+	TestTrue(
+		*FString::Printf(TEXT("起伏の上では高さが変わる（%.3f m）"), OffHeight),
+		FMath::Abs(OffHeight + 0.05) > 0.2);
+	TestTrue(
+		*FString::Printf(TEXT("起伏の上では車体が傾く（ピッチ %.4f / ロール %.4f rad）"),
+		                 Actor->GetTerrainPitchRad(), Actor->GetTerrainRollRad()),
+		FMath::Abs(Actor->GetTerrainPitchRad())
+		+ FMath::Abs(Actor->GetTerrainRollRad()) > 1e-4);
+
+	// --- 傾きの「向き」を検査する ------------------------------------------
+	//
+	// **大きさだけを見ていたせいで、上り坂で機首が下がっていた。**
+	// 上の検査は「傾きがゼロでない」しか言っていないので、符号を逆に
+	// しても通ってしまう（実際に通っていた）。
+	//
+	// ロールでも同じ間違いをしている（`AdvanceVisualAttitude` のコメント）。
+	// **向きのあるものは、大きさではなく向きを検査すること。**
+	{
+		// 傾斜のはっきりした場所を高さ場から探す。**座標を書き写さない。**
+		// 地形を作り直したときに、テストだけ古い場所を見続けるのを避ける。
+		double ProbeX = 0.0;
+		double ProbeY = 0.0;
+		double ProbeDzDx = 0.0;
+		double ProbeDzDy = 0.0;
+		bool bFound = false;
+
+		for (double X = -500.0; X <= 800.0 && !bFound; X += 20.0)
+		{
+			for (double Y = -400.0; Y <= 500.0 && !bFound; Y += 20.0)
+			{
+				double DzDx = 0.0;
+				double DzDy = 0.0;
+				Field.SlopeAt(X, Y, DzDx, DzDy);
+				// 前後・左右のどちらの符号もはっきりしている場所を選ぶ
+				if (FMath::Abs(DzDx) > 0.05 && FMath::Abs(DzDy) > 0.05)
+				{
+					ProbeX = X;
+					ProbeY = Y;
+					ProbeDzDx = DzDx;
+					ProbeDzDy = DzDy;
+					bFound = true;
+				}
+			}
+		}
+
+		if (!bFound)
+		{
+			AddError(TEXT("傾斜のはっきりした場所が高さ場に無い"));
+			DestroyWorld(World);
+			return false;
+		}
+
+		AddInfo(FString::Printf(TEXT("傾斜の検査地点 (%.0f, %.0f) dz/dx=%.4f dz/dy=%.4f"),
+		                        ProbeX, ProbeY, ProbeDzDx, ProbeDzDy));
+
+		auto SampleAt = [&](double HeadingRad)
+		{
+			ZN6::FVehicleState Slope = Actor->MakeInitialState(0.0, 0);
+			Slope.XM = ProbeX;
+			Slope.YM = ProbeY;
+			Slope.HeadingRad = HeadingRad;
+			Actor->SetPhysicsState(Slope);
+			Actor->AdvancePhysics(1.0 / 60.0);
+		};
+
+		// --- ピッチ ---
+		//
+		// 向き 0（+X を向く）で dz/dx > 0 なら、前が高い = 上り坂。
+		// **上り坂では機首が上がる**（UE の正のピッチ）。
+		SampleAt(0.0);
+		const double UphillPitch = ProbeDzDx > 0.0
+			? Actor->GetTerrainPitchRad() : -Actor->GetTerrainPitchRad();
+		TestTrue(
+			*FString::Printf(
+				TEXT("上り坂で機首が上がる（ピッチ %.5f rad / dz/dx %.4f）"),
+				Actor->GetTerrainPitchRad(), ProbeDzDx),
+			UphillPitch > 1e-4);
+
+		// 同じ場所で逆を向けば下り坂になる。**符号が反転すること。**
+		SampleAt(ZN6::Pi);
+		const double DownhillPitch = ProbeDzDx > 0.0
+			? Actor->GetTerrainPitchRad() : -Actor->GetTerrainPitchRad();
+		TestTrue(
+			*FString::Printf(TEXT("向きを反転すると下り坂になる（ピッチ %.5f rad）"),
+			                 Actor->GetTerrainPitchRad()),
+			DownhillPitch < -1e-4);
+
+		// --- ロール ---
+		//
+		// 向き 0 なら車の左は +Y。dz/dy > 0 は左の地面が高いということ。
+		// **左が高ければ右側が下がる**（UE の正のロールは右下がり）。
+		SampleAt(0.0);
+		const double LeftHighRoll = ProbeDzDy > 0.0
+			? Actor->GetTerrainRollRad() : -Actor->GetTerrainRollRad();
+		TestTrue(
+			*FString::Printf(
+				TEXT("左の地面が高ければ右へ傾く（ロール %.5f rad / dz/dy %.4f）"),
+				Actor->GetTerrainRollRad(), ProbeDzDy),
+			LeftHighRoll > 1e-4);
+	}
 
 	DestroyWorld(World);
 	return true;

@@ -24,15 +24,16 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
 
 from aero import Aerodynamics
 from brake import Brakes
 from clutch import Clutch
 from differential import OpenDifferential, TorsenDifferential
-from drivetrain import FORWARD_GEARS, Drivetrain
+from drivetrain import FORWARD_GEARS, NEUTRAL, SELECTABLE_GEARS, Drivetrain
 from engine import Engine
+from setup import CarSetup
 from tire import Tire
 from units import GRAVITY_MPS2, rads_to_rpm, rpm_to_rads
 from vehicle_data import VehicleData
@@ -53,6 +54,12 @@ class ControlInput:
     brake: float = 0.0
     steer_rad: float = 0.0
     gear: str = "1"
+    """入れている段。`"1"`-`"6"` / `"N"`（ニュートラル）/ `"R"`（後退）。
+
+    **数値の添字ではなく文字列。** H パターンシフターは「今どの段に
+    入っているか」を絶対値で送ってくるので、段の名前をそのまま持つ。
+    ニュートラルと後退は「6速の外側」であって連番の端ではない。
+    """
     clutch: float = 1.0
     """0.0 = 完全に切る / 1.0 = 完全に繋ぐ。**bool ではない。**
 
@@ -60,6 +67,16 @@ class ControlInput:
     """
     handbrake: float = 0.0
     """サイドブレーキの引き量 0.0-1.0。**後輪のみ**に効く。"""
+
+    def __post_init__(self) -> None:
+        # **知らない段を黙って受け取らない**（憲法ルール6）。
+        # `"7"` や `0` を渡されたとき、ここで止めないと減速比の辞書引きで
+        # 落ちるか、もっと悪いと別の段として走ってしまう。
+        if self.gear not in SELECTABLE_GEARS:
+            raise ValueError(
+                "選べない段: {!r}。選べるのは {}".format(
+                    self.gear, "/".join(SELECTABLE_GEARS))
+            )
 
     @property
     def clutch_engaged(self) -> bool:
@@ -113,12 +130,19 @@ class VehicleOutputs:
 class Vehicle:
     """ZN6（FR）の平面運動モデル。"""
 
-    def __init__(self, data: VehicleData, use_lsd: bool = True) -> None:
+    def __init__(self, data: VehicleData, use_lsd: bool = True,
+                 setup: "CarSetup" = None) -> None:
         self.data = data
+
+        # **既定は「何も変えない」。** そのときの結果は、セッティング機能を
+        # 入れる前とビット単位で一致する（Tests/test_setup.py で検査）。
+        self.setup = setup if setup is not None else CarSetup()
 
         self.engine = Engine(data)
         self.drivetrain = Drivetrain(data)
         self.brakes = Brakes(data)
+        if self.setup.brake_bias is not None:
+            self.brakes.bias_front = self.setup.brake_bias
         self.clutch = Clutch(data)
         self.aero = Aerodynamics(data)
         self.differential = TorsenDifferential(data) if use_lsd else OpenDifferential()
@@ -128,7 +152,9 @@ class Vehicle:
         self.wheelbase_m = data.value("dimensions.wheelbase", "m")
         self.track_front_m = data.value("dimensions.track_front", "m")
         self.track_rear_m = data.value("dimensions.track_rear", "m")
-        self.cg_height_m = data.value("inertia.cg_height", "m")
+        # 車高を下げれば重心も下がる。**基準値そのものは書き換えない。**
+        self.cg_height_baseline_m = data.value("inertia.cg_height", "m")
+        self.cg_height_m = self.setup.cg_height_m(self.cg_height_baseline_m)
         self.lf_m = data.value("inertia.cg_longitudinal_from_front_axle", "m")
         self.lr_m = self.wheelbase_m - self.lf_m
         self.roll_dist_front = data.value(
@@ -140,7 +166,13 @@ class Vehicle:
         self.idle_omega_rads = rpm_to_rads(data.value("engine.idle_rpm", "1/min"))
 
         weight_n = self.mass_kg * GRAVITY_MPS2
-        self.tire = Tire(data, nominal_load_n=weight_n / 4.0)
+        # **キャンバーを使うときだけ、その係数を読む。**
+        # 常に読むと、キャンバー 0 の走行まで結果の信頼度が
+        # assumed の 0.10 に落ちる（効いていない値で信頼度を下げない）。
+        uses_camber = (self.setup.camber_front_rad != 0.0
+                       or self.setup.camber_rear_rad != 0.0)
+        self.tire = Tire(data, nominal_load_n=weight_n / 4.0,
+                         read_camber=uses_camber)
         self.wheel_radius_m = self.tire.effective_radius_m
         self.static_front_n = weight_n * self.lr_m / self.wheelbase_m
         self.static_rear_n = weight_n * self.lf_m / self.wheelbase_m
@@ -155,15 +187,24 @@ class Vehicle:
 
     # --- 荷重 -------------------------------------------------------------
 
-    def wheel_loads_n(self, ax_mps2: float, ay_mps2: float) -> Dict[str, float]:
+    def wheel_loads_n(self, ax_mps2: float, ay_mps2: float,
+                      normal_scale: float = 1.0) -> Dict[str, float]:
         """準静的な4輪の垂直荷重 [N]。
 
         前後: 加速で後軸へ。**FR なので駆動輪の荷重が増える。**
         左右: 前後ロール剛性配分で分配する。
+
+        `normal_scale` は斜面での法線荷重の係数（平地なら 1.0）。
+        傾いた面では垂直荷重が mg*cos(傾き) になる。
+
+        **ax / ay は加速度計が読む値（タイヤ力/質量）を渡すこと。**
+        斜面で停車していると、タイヤ力が重力と釣り合って ax = g*sin(傾き)
+        になり、**坂の下側の軸へ荷重が移る**という正しい結果が出る。
+        重力を別に足すと二重に数えることになる。
         """
         longitudinal_transfer = self.mass_kg * ax_mps2 * self.cg_height_m / self.wheelbase_m
-        front_total = self.static_front_n - longitudinal_transfer
-        rear_total = self.static_rear_n + longitudinal_transfer
+        front_total = self.static_front_n * normal_scale - longitudinal_transfer
+        rear_total = self.static_rear_n * normal_scale + longitudinal_transfer
 
         lateral_front = (
             self.roll_dist_front * self.mass_kg * ay_mps2
@@ -186,28 +227,79 @@ class Vehicle:
 
     # --- スリップ ---------------------------------------------------------
 
+    def wheel_steer_rad(self, wheel: str, steer_rad: float) -> float:
+        """その車輪が向いている角度 [rad]。操舵にトーを足したもの。
+
+        **後輪にも角度が付きうる。** 後輪トーを入れられるようにしてある。
+        既定（トー 0）では後輪はちょうど 0 になり、以前と同じ計算になる。
+        """
+        base = steer_rad if wheel in FRONT_WHEELS else 0.0
+        return base + self.setup.wheel_toe_rad(wheel)
+
     def _wheel_velocity(self, state: VehicleState, wheel: str, steer_rad: float):
         """車輪位置での接地点速度を、車輪座標系で返す。"""
         x, y = self._wheel_position[wheel]
         vx = state.vx_mps - state.yaw_rate_rads * y
         vy = state.vy_mps + state.yaw_rate_rads * x
 
-        if wheel in FRONT_WHEELS:
-            cos_d, sin_d = math.cos(steer_rad), math.sin(steer_rad)
+        # **角度がちょうど 0 なら回さない。** 回転を通すと丸めで最下位
+        # ビットが動きうる。既定のセッティングで以前と完全に一致させる
+        # ため、ここで分岐する。
+        angle = self.wheel_steer_rad(wheel, steer_rad)
+        if angle != 0.0:
+            cos_d, sin_d = math.cos(angle), math.sin(angle)
             vx, vy = vx * cos_d + vy * sin_d, -vx * sin_d + vy * cos_d
         return vx, vy
 
     # --- 1ステップ --------------------------------------------------------
 
-    def step(self, state: VehicleState, control: ControlInput, dt_s: float):
-        """状態を dt 進め、(新しい状態, 内部量) を返す。"""
+    def step(self, state: VehicleState, control: ControlInput, dt_s: float,
+             slope_gx_mps2: float = 0.0, slope_gy_mps2: float = 0.0,
+             normal_scale: float = 1.0,
+             contact_loads_n: Dict[str, float] = None):
+        """状態を dt 進め、(新しい状態, 内部量) を返す。
+
+        `slope_*` は斜面が車体に与える重力成分 [m/s^2]（車体固定系）、
+        `normal_scale` は法線荷重の係数。**既定は平地**で、そのときの
+        結果は地形を入れる前と完全に一致する（参照値が変わらない）。
+
+        地形の値は `Physics/terrain.py` が高さ場から求める。
+        **描画メッシュからは読まない**（憲法ルール4）。
+
+        `contact_loads_n` を渡すと、垂直荷重を準静的な式ではなく
+        **`Physics/ride.py` が力の釣り合いで解いた接地力**にする。
+
+        これが無いと、**浮いた車輪のグリップが消えない。** 接地モデルは
+        「その輪は地面を押していない」と言っているのに、タイヤは
+        準静的な荷重（常に正）で力を出し続ける。段差で跳ねても
+        タイヤが効いたままになり、飛んでいる車が曲がれてしまう。
+
+        **既定は None で、そのときは今までと1ビットも変わらない。**
+        検証済みの結果を、接続そのもので動かさないため。
+
+        呼ぶ側は前ステップの接地力を渡す（1ステップ遅れ）。ride は
+        vehicle の加速度を要るので、同時には解けない。dt が十分小さければ
+        差は無視できる（荷重を1ステップ遅らせるのと同じ理屈）。
+        """
         outputs = VehicleOutputs()
 
-        # --- 前ステップの加速度から荷重を決める（準静的） ---
-        # 反復せず1ステップ遅らせる。dt が十分小さければ差は無視できる。
-        ax_prev = getattr(self, "_last_ax", 0.0)
-        ay_prev = getattr(self, "_last_ay", 0.0)
-        fz = self.wheel_loads_n(ax_prev, ay_prev)
+        # --- 垂直荷重 ---
+        if contact_loads_n is None:
+            # 前ステップの加速度から荷重を決める（準静的）。
+            # 反復せず1ステップ遅らせる。dt が十分小さければ差は無視できる。
+            ax_prev = getattr(self, "_last_ax", 0.0)
+            ay_prev = getattr(self, "_last_ay", 0.0)
+            fz = self.wheel_loads_n(ax_prev, ay_prev, normal_scale)
+        else:
+            missing = [w for w in WHEELS if w not in contact_loads_n]
+            if missing:
+                # **黙って準静的へ戻さない**（憲法ルール6）。
+                # 戻すと「接地モデルを使っているつもりで使えていない」
+                # 状態に気づけない。
+                raise ValueError(
+                    "contact_loads_n に {} が無い".format(", ".join(missing)))
+            # **負を通さない。** 地面は押せるが引けない。
+            fz = {w: max(contact_loads_n[w], 0.0) for w in WHEELS}
 
         # --- エンジンとクラッチ ---
         #
@@ -219,13 +311,38 @@ class Vehicle:
         rear_omega_mean = (
             state.wheel_omega_rads["RL"] + state.wheel_omega_rads["RR"]
         ) / 2.0
-        gearbox_omega = self.drivetrain.engine_omega_rads(rear_omega_mean, control.gear)
+
+        # **ニュートラルでは歯車が噛んでいない。**
+        #
+        # クラッチペダルをどこまで戻していても、変速機の中で入力軸と
+        # 出力軸が繋がっていないので車輪へトルクは行かない。クラッチを
+        # 切ったのと同じ扱いにする（`clutch=0`）と、
+        #
+        #   - クラッチ容量が 0 になり伝達トルクが 0
+        #   - `clutch_locked` が False になり、車輪慣性にエンジン慣性を
+        #     足す枝も自動的に外れる
+        #
+        # が同時に成り立つ。**「だいたい同じだから」ではなく、
+        # 動力の通り道が無いという同じ理由で同じ式になる。**
+        neutral = control.gear == NEUTRAL
+        if neutral:
+            # 変速機入力軸は空転する。相対回転差を作らないために
+            # エンジン回転をそのまま入れる（容量 0 なので結果には
+            # 効かないが、意味の無い値を渡さない）。
+            gearbox_omega = state.engine_omega_rads
+            engine_control = replace(control, clutch=0.0)
+        else:
+            gearbox_omega = self.drivetrain.engine_omega_rads(
+                rear_omega_mean, control.gear)
+            engine_control = control
 
         engine_omega, clutch_torque, engine_torque, clutch_locked = self._integrate_engine(
-            state.engine_omega_rads, gearbox_omega, control, dt_s
+            state.engine_omega_rads, gearbox_omega, engine_control, dt_s
         )
         engine_rpm = rads_to_rpm(engine_omega)
-        axle_torque = self.drivetrain.wheel_torque_nm(clutch_torque, control.gear)
+        axle_torque = (
+            0.0 if neutral
+            else self.drivetrain.wheel_torque_nm(clutch_torque, control.gear))
 
         torque_rl, torque_rr = self.differential.split_torque_nm(
             axle_torque, state.wheel_omega_rads["RL"], state.wheel_omega_rads["RR"]
@@ -250,7 +367,8 @@ class Vehicle:
 
             kappa = Tire.slip_ratio(omega, self.wheel_radius_m, vx_w)
             alpha = Tire.slip_angle_rad(vy_w, vx_w)
-            fx_w, fy_w = self.tire.forces_n(fz[wheel], kappa, alpha)
+            camber_lean = self.setup.wheel_camber_lean_rad(wheel)
+            fx_w, fy_w = self.tire.forces_n(fz[wheel], kappa, alpha, camber_lean)
 
             # 転がり抵抗（進行方向と逆）
             if abs(vx_w) > 0.1:
@@ -261,21 +379,53 @@ class Vehicle:
             # 車輪軸へ換算して足す（1速では総比^2 = 約221倍になり支配的）。
             # 滑っている間はエンジンが切り離されているので足さない。
             inertia = self.wheel_inertia_kgm2
-            if wheel in REAR_WHEELS and clutch_locked:
+            if wheel in REAR_WHEELS and clutch_locked and not neutral:
                 inertia += self.drivetrain.reflected_inertia_at_wheel_kgm2(control.gear) / 2.0
 
             brake = math.copysign(brake_torque[wheel], omega) if abs(omega) > 0.1 else 0.0
             omega_dot = (drive_torque[wheel] - brake - fx_w * self.wheel_radius_m) / inertia
-            omega_new = omega + omega_dot * dt_s
+
+            # 半陰的に積分する（issue #24）。
+            #
+            # **陽解法だと低速で毎ステップ振動する。** fx は omega に
+            # 依存する（kappa = (omega*r - v)/max(|v|,0.5)）のに、その
+            # 依存を陽に扱っていたため。安定条件は
+            #
+            #     dt < 2*I / (C_kappa * r^2) * max(|v|, 0.5)
+            #
+            # で、スリップ率の分母が下限 0.5 を持つぶん低速ほど実効剛性が
+            # 上がり、静止発進には dt < 0.19 ms が要った（既定は 2 ms）。
+            #
+            # fx の omega 依存を線形化して陰的に解く:
+            #
+            #     d = dt/I * (T - r*fx(omega))
+            #     omega_new = omega + d / (1 + dt*r*k/I)      k = d(fx)/d(omega)
+            #
+            # k はその動作点での**接線剛性**を使う。線形域の c_kappa を
+            # そのまま使うと、飽和している発進時に過剰減衰し、刻みに
+            # よって速度が食い違った（2秒後 3.13 / 4.19 m/s）。
+            #
+            # **定常解は陽解法と同じ。** 分母は増分に掛かるだけで、
+            # 増分がゼロになる条件（T = r*fx）を変えない。したがって
+            # 収束していた結果（0-100km/h 等）は動かず、振動していた
+            # 領域だけが直る。
+            d_fx_d_kappa = self.tire.longitudinal_slope_n_per_slip(
+                fz[wheel], kappa, alpha, camber_lean
+            )
+            d_fx_d_omega = d_fx_d_kappa * self.wheel_radius_m / max(abs(vx_w), 0.5)
+            damping = 1.0 + dt_s * self.wheel_radius_m * d_fx_d_omega / inertia
+            omega_new = omega + omega_dot * dt_s / damping
 
             # 制動でゼロを跨いだらロックさせる（逆回転させない）
             if control.brake > 0.0 and omega * omega_new < 0.0:
                 omega_new = 0.0
             new_omega[wheel] = omega_new
 
-            # 車輪座標系 -> 車体座標系
-            if wheel in FRONT_WHEELS:
-                cos_d, sin_d = math.cos(control.steer_rad), math.sin(control.steer_rad)
+            # 車輪座標系 -> 車体座標系。**速度を回したのと同じ角度で戻す。**
+            # 別の角度を使うと、力と速度の向きが食い違って仕事が合わなくなる。
+            angle = self.wheel_steer_rad(wheel, control.steer_rad)
+            if angle != 0.0:
+                cos_d, sin_d = math.cos(angle), math.sin(angle)
                 fx_b = fx_w * cos_d - fy_w * sin_d
                 fy_b = fx_w * sin_d + fy_w * cos_d
             else:
@@ -310,15 +460,27 @@ class Vehicle:
         # これを ay として記録すると「μ 1.1 で 2.8g」という偽の警告が出る。
         ax_mps2 = sum_fx / self.mass_kg
         ay_mps2 = sum_fy / self.mass_kg
-        vx_dot = ax_mps2 + state.vy_mps * state.yaw_rate_rads
-        vy_dot = ay_mps2 - state.vx_mps * state.yaw_rate_rads
+        # **重力は状態微分にだけ足す。** ax_mps2 は加速度計が読む値
+        # （タイヤ力/質量）のままにしておく。そうしないと荷重移動が
+        # 二重に数えられる（wheel_loads_n のコメント参照）。
+        vx_dot = ax_mps2 + slope_gx_mps2 + state.vy_mps * state.yaw_rate_rads
+        vy_dot = ay_mps2 + slope_gy_mps2 - state.vx_mps * state.yaw_rate_rads
         yaw_accel = sum_mz / self.izz_kgm2
 
         self._last_ax = ax_mps2
         self._last_ay = ay_mps2
 
+        # **前後速度を 0 で切り上げない。**
+        #
+        # 以前は `max(..., 0.0)` で負を潰していた。前進しか無かった間は
+        # 「止まっているのに後ろへずり下がる」のを防いでいたが、
+        # **後退に入れても車が動かない**という形で表に出た（加速度は
+        # 正しく負を向いているのに、速度が毎ステップ 0 に戻されていた）。
+        #
+        # 止まった車が勝手に下がらないことは、タイヤ力と制動トルクが
+        # 受け持つべきで、状態変数を切り上げて作る性質ではない。
         new_state = VehicleState(
-            vx_mps=max(state.vx_mps + vx_dot * dt_s, 0.0),
+            vx_mps=state.vx_mps + vx_dot * dt_s,
             vy_mps=state.vy_mps + vy_dot * dt_s,
             yaw_rate_rads=state.yaw_rate_rads + yaw_accel * dt_s,
             x_m=state.x_m + (state.vx_mps * math.cos(state.heading_rad)
@@ -367,11 +529,28 @@ class Vehicle:
 
         if locked:
             # 拘束。エンジンは変速機入力と一体で回る
+            #
+            # **変速機側がアイドルより遅いときは、アイドル制御が
+            # エンジンを支えている。** 実車の ECU は回転が落ちると
+            # 燃料を足して回転を保つ。
+            governed = gearbox_omega < self.idle_omega_rads
             engine_omega = max(gearbox_omega, self.idle_omega_rads)
             engine_torque = self.engine.torque_nm(engine_omega, control.throttle)
             # エンジンが出したトルクはそのままクラッチを通る。
             # 慣性による抵抗は、車輪側に反映した等価慣性が受け持つ。
             clutch_torque = engine_torque
+            if governed:
+                # **支えられているエンジンは駆動系を後ろへ引けない。**
+                #
+                # 回転をアイドルで切り上げているだけだった間は、停車中に
+                # 1速でクラッチを繋ぐと閉じスロットルの負トルクが残り、
+                # 車が後ろへ 0.3 m/s でずり下がった。前後速度を 0 で
+                # 切り上げていたので見えていなかっただけである。
+                #
+                # 実車ではこの状態は「アイドル制御が支える」か
+                # 「エンストする」のどちらかで、**後ろへ押す**ことはない。
+                # エンストは別途モデル化していないので、ここでは支える側を採る。
+                clutch_torque = max(clutch_torque, 0.0)
             if abs(clutch_torque) > capacity:
                 clutch_torque = math.copysign(capacity, clutch_torque)
             return engine_omega, clutch_torque, engine_torque, True
@@ -401,9 +580,13 @@ class Vehicle:
 
     def initial_state(self, speed_mps: float = 0.0, gear: str = "1") -> VehicleState:
         omega = speed_mps / self.wheel_radius_m
-        engine_omega = max(
-            self.drivetrain.engine_omega_rads(omega, gear), self.idle_omega_rads
-        )
+        if gear == NEUTRAL:
+            # 噛んでいないので車速からエンジン回転を決められない。アイドル。
+            engine_omega = self.idle_omega_rads
+        else:
+            engine_omega = max(
+                self.drivetrain.engine_omega_rads(omega, gear), self.idle_omega_rads
+            )
         return VehicleState(
             vx_mps=speed_mps,
             wheel_omega_rads={w: omega for w in WHEELS},

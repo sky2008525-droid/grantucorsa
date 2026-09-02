@@ -1,0 +1,12 @@
+Fir Tree 01
+Author : Rob Tuytel (photography), Rico Cilliers (modeling)
+License: CC0
+Source : https://polyhaven.com/a/fir_tree_01
+File   : https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fir_tree_01/fir_tree_01_1k.gltf
+md5    : 0a184431efdba9e4bf76900d8d56504d
+Fetched: 2026-09-02
+
+取得と変換: Tools/fetch_polyhaven_trees.py
+変換の内容: 配布物に入っている 3 本のうち fir_tree_01_c_LOD0 だけを残して GLB 化した。
+            頂点の間引き（Decimate）と拡大縮小はしていない。
+            詳細は Docs/PHASE15_DATA_LICENCE.md §6.4

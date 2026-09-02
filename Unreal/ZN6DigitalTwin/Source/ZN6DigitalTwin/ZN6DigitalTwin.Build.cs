@@ -11,6 +11,10 @@ public class ZN6DigitalTwin : ModuleRules
 		// （Physics/ZN6VehicleData）が依存する。
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "Json" });
 
+		// HUD とメニューは Slate で直接描く。**.uasset を作らない**ので、
+		// 画面まわりの変更が全部ソースの差分として残る。
+		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore", "ApplicationCore" });
+
 		// Physics/ を "ZN6Units.h" のように書けるようにする
 		// （テスト側は "Physics/..." で参照するのでモジュール直下も残す）。
 		PublicIncludePaths.Add(ModuleDirectory);

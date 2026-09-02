@@ -25,6 +25,7 @@ survey で測ってから取ること。
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import sys
@@ -131,6 +132,147 @@ def total_size(entry):
     return size
 
 
+# ---------------------------------------------------------------------------
+# 実寸の測定
+#
+# **API の `dimensions` を実寸として使ってはいけない。**
+# 2026-09-02 に実測して分かったこと: あれは「ファイルに入っている全部を
+# 囲む箱」で、変種を横に並べてある資産では X が実物の何倍にもなる。
+#
+#   pine_tree_01        API 26.72 x 1.30 x 17.58 m
+#                       実際  木が3本（幅 7.6 m）横並び。高さ 17.58 m だけが正しい
+#   modular_electricity_poles  API の高さ 7.00 m / 実際は 10.04 m
+#
+# **高さ（API の Z）ですら合わないものがある。** だから落とした glTF の
+# 頂点の min/max から測る。ここを間違えると「若木を拡大して大木のふりを
+# する」のと同じことを、数字の側で繰り返すことになる。
+# ---------------------------------------------------------------------------
+
+def _matrix_multiply(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)]
+            for i in range(4)]
+
+
+def _node_matrix(node):
+    """glTF ノードのローカル行列。`matrix` があればそれ、無ければ TRS。"""
+    if "matrix" in node:
+        m = node["matrix"]                 # glTF は列優先
+        return [[m[0], m[4], m[8], m[12]],
+                [m[1], m[5], m[9], m[13]],
+                [m[2], m[6], m[10], m[14]],
+                [m[3], m[7], m[11], m[15]]]
+
+    tx, ty, tz = node.get("translation", (0.0, 0.0, 0.0))
+    qx, qy, qz, qw = node.get("rotation", (0.0, 0.0, 0.0, 1.0))
+    sx, sy, sz = node.get("scale", (1.0, 1.0, 1.0))
+
+    rotation = [
+        [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw), 0.0],
+        [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw), 0.0],
+        [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy), 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    for row in range(3):
+        rotation[row][0] *= sx
+        rotation[row][1] *= sy
+        rotation[row][2] *= sz
+    rotation[0][3], rotation[1][3], rotation[2][3] = tx, ty, tz
+    return rotation
+
+
+def _apply(matrix, point):
+    return [sum(matrix[i][k] * point[k] for k in range(3)) + matrix[i][3] for i in range(3)]
+
+
+def _mesh_bounds(doc, mesh_index, matrix, box):
+    """メッシュの各プリミティブの min/max（8隅）を変換して box に足し込む。"""
+    for primitive in doc["meshes"][mesh_index].get("primitives", []):
+        accessor = doc["accessors"][primitive["attributes"]["POSITION"]]
+        low, high = accessor.get("min"), accessor.get("max")
+        if not low or not high:
+            continue
+        for i in range(8):
+            corner = [high[axis] if (i >> axis) & 1 else low[axis] for axis in range(3)]
+            world = _apply(matrix, corner)
+            for axis in range(3):
+                box[0][axis] = min(box[0][axis], world[axis])
+                box[1][axis] = max(box[1][axis], world[axis])
+
+
+def _walk(doc, index, parent, box):
+    node = doc["nodes"][index]
+    matrix = _matrix_multiply(parent, _node_matrix(node))
+    if "mesh" in node:
+        _mesh_bounds(doc, node["mesh"], matrix, box)
+    for child in node.get("children", []):
+        _walk(doc, child, matrix, box)
+    return matrix
+
+
+def _empty_box():
+    return [[1e30, 1e30, 1e30], [-1e30, -1e30, -1e30]]
+
+
+def _size_zup(box):
+    """glTF は Y 上。manifest には [幅, 奥行, 高さ] の順（Z 上）で書く。"""
+    if box[0][0] > box[1][0]:
+        return None
+    dx, dy, dz = (box[1][axis] - box[0][axis] for axis in range(3))
+    return [round(dx, 3), round(dz, 3), round(dy, 3)]
+
+
+def _read_gltf_json(path: Path):
+    """.gltf（JSON）と .glb（バイナリ）のどちらからも JSON を取り出す。"""
+    if path.suffix.lower() != ".glb":
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    data = path.read_bytes()
+    if data[:4] != b"glTF":
+        raise RuntimeError("GLB のマジックが違う: %s" % path)
+    offset = 12                                    # ヘッダ 12 バイトの後
+    while offset + 8 <= len(data):
+        length = int.from_bytes(data[offset:offset + 4], "little")
+        kind = data[offset + 4:offset + 8]
+        body = data[offset + 8:offset + 8 + length]
+        if kind == b"JSON":
+            return json.loads(body.decode("utf-8"))
+        offset += 8 + length
+    raise RuntimeError("GLB に JSON チャンクが無い: %s" % path)
+
+
+def measure_gltf(path: Path):
+    """落とした glTF / GLB から実寸を測る。
+
+    @return (全体の [幅, 奥行, 高さ] m, {トップレベルノード名: 同じ})
+
+    **部品ごとにも出す。** 変種が横並びになっている資産（fir_tree_01 の
+    a / b / c など）は、全体の箱を見ても1本の木の背丈が分からない。
+    """
+    doc = _read_gltf_json(path)
+    roots = []
+    scenes = doc.get("scenes") or []
+    if scenes:
+        roots = scenes[doc.get("scene", 0)].get("nodes", [])
+    if not roots:
+        roots = list(range(len(doc.get("nodes", []))))
+
+    identity = [[1.0 if i == j else 0.0 for j in range(4)] for i in range(4)]
+    whole = _empty_box()
+    parts = {}
+    for index in roots:
+        box = _empty_box()
+        _walk(doc, index, identity, box)
+        size = _size_zup(box)
+        if size is None:
+            continue
+        name = doc["nodes"][index].get("name") or ("node_%d" % index)
+        parts[name] = size
+        for axis in range(3):
+            whole[0][axis] = min(whole[0][axis], box[0][axis])
+            whole[1][axis] = max(whole[1][axis], box[1][axis])
+    return _size_zup(whole), parts
+
+
 def cmd_survey(args):
     assets = get_json("%s/assets?t=%s&c=%s" % (API, args.kind, args.category))
     print("カテゴリ '%s': %d 件" % (args.category, len(assets)))
@@ -196,14 +338,35 @@ def cmd_fetch(args):
                       % (asset_id, size / 1e6, args.max_bytes / 1e6))
                 continue
             print("取得中: %s (%s, %.1f MB)" % (asset_id, resolution, size / 1e6))
-            written = download(entry["url"], base / Path(entry["url"]).name, entry.get("md5"))
+            gltf_path = base / Path(entry["url"]).name
+            written = download(entry["url"], gltf_path, entry.get("md5"))
             for rel, spec in entry.get("include", {}).items():
                 written += download(spec["url"], base / rel, spec.get("md5"))
+            whole, parts = measure_gltf(gltf_path)
             record.update({
                 "resolution": resolution,
                 "polycount": info.get("polycount"),
-                "gltf": Path(entry["url"]).name,
+                "gltf": gltf_path.name,
+                # **実測値。** API の dimensions ではない（measure_gltf の注記）。
+                "size_m": whole,
+                "size_source": "measured_from_gltf",
             })
+            # **部品ごとの寸法は多いと読めない。** modular_* は 100 個を
+            # 超える（modular_urban_apartments_facade で 147）。数が多い
+            # ときは「いちばん背の高い部品」だけ残す。**配置側が知りたい
+            # のは「1本の木が何 m か」であって、ボルトの寸法ではない。**
+            record["size_m"] = whole
+            if len(parts) > 1:
+                tallest = max(parts.items(), key=lambda kv: kv[1][2])
+                record["tallest_part"] = {"name": tallest[0], "size_m": tallest[1]}
+                if len(parts) <= 12:
+                    record["parts_m"] = parts
+                else:
+                    record["part_count"] = len(parts)
+            print("  実寸: %.2f x %.2f x %.2f m（幅 x 奥行 x 高さ / 全体）" % tuple(whole))
+            if len(parts) > 1:
+                print("        部品 %d 個。最も高い %s = %.2f x %.2f x %.2f m"
+                      % tuple([len(parts), tallest[0]] + tallest[1]))
 
         elif args.kind == "hdris":
             resolution, entry = hdri_entry(files, args.resolution)
@@ -231,6 +394,7 @@ def cmd_fetch(args):
             record.update({"resolution": args.resolution, "maps": maps})
 
         record["bytes"] = written
+        record["fetched"] = datetime.date.today().isoformat()
         manifest[asset_id] = record
         print("  -> %s (%.1f MB)" % (base.relative_to(REPO_ROOT), written / 1e6))
 
@@ -240,6 +404,79 @@ def cmd_fetch(args):
     )
     print()
     print("manifest: %s (%d 件)" % (manifest_path.relative_to(REPO_ROOT), len(manifest)))
+    return 0
+
+
+def cmd_verify(args):
+    """**置いてあるファイルを PolyHaven の md5 と突き合わせる。**
+
+    `download()` は取得のたびに検証しているが、その結果を残していない。
+    後から「このファイルは壊れていないか」「配布物と同じものか」を
+    確かめる手段が無いと、`Docs/PHASE15_DATA_LICENCE.md` に md5 を
+    書けない（憲法ルール2: 出典を書けないものは置かない）。
+
+    ここで各ファイルの md5 を計算し、API の値と比べ、manifest に
+    `md5` として書き戻す。**合わなかったものは manifest に書かない。**
+    """
+    manifest_path = DEST_ROOT / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    checked, mismatched, missing, unknown = 0, [], [], []
+    for asset_id, record in sorted(manifest.items()):
+        if record.get("trimmed"):
+            # 変種を選んで作り直したもの。**配布物と中身が違うので、
+            # 配布物の md5 と比べても合わない**（`trimmed.source_md5`
+            # に配布物側の値が入っている）。
+            continue
+        kind = record.get("kind", "models")
+        base = DEST_ROOT / asset_id
+        try:
+            files = get_json("%s/files/%s" % (API, asset_id))
+        except Exception as exc:                              # noqa: BLE001
+            unknown.append("%s: API %s" % (asset_id, exc))
+            continue
+
+        expected = {}
+        if kind == "models":
+            _, entry = gltf_entry(files, record.get("resolution", "1k"))
+            if entry:
+                expected[Path(entry["url"]).name] = entry.get("md5")
+                for rel, spec in entry.get("include", {}).items():
+                    expected[rel] = spec.get("md5")
+        elif kind == "hdris":
+            _, entry = hdri_entry(files, record.get("resolution", "4k"))
+            if entry:
+                expected[Path(entry["url"]).name] = entry.get("md5")
+        else:
+            for _, _, spec in texture_entries(files, record.get("resolution", "2k")):
+                expected[Path(spec["url"]).name] = spec.get("md5")
+
+        got = {}
+        for rel, want in expected.items():
+            path = base / rel
+            if not path.is_file():
+                missing.append("%s/%s" % (asset_id, rel))
+                continue
+            have = hashlib.md5(path.read_bytes()).hexdigest()
+            checked += 1
+            if want and have != want:
+                mismatched.append("%s/%s (期待 %s / 実際 %s)" % (asset_id, rel, want, have))
+            else:
+                got[rel] = have
+        if got and len(got) == len(expected):
+            record["md5"] = got
+
+    print("照合: %d ファイル / 不一致 %d / 欠落 %d"
+          % (checked, len(mismatched), len(missing)))
+    for line in mismatched + missing + unknown:
+        print("  !! " + line, file=sys.stderr)
+    if mismatched or missing or unknown:
+        # **黙って通さない**（憲法ルール6）。
+        return 1
+
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print("manifest に md5 を書いた: %s" % manifest_path.relative_to(REPO_ROOT))
     return 0
 
 
@@ -260,6 +497,9 @@ def main(argv=None):
     fetch.add_argument("--max-bytes", type=int, default=25_000_000,
                        help="1アセットあたりの上限。既定 25 MB")
     fetch.set_defaults(func=cmd_fetch)
+
+    verify = sub.add_parser("verify", help="置いてあるファイルの md5 を照合し manifest に書く")
+    verify.set_defaults(func=cmd_verify)
 
     args = parser.parse_args(argv)
     return args.func(args)

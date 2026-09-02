@@ -108,6 +108,10 @@ namespace ZN6
 		OutParam.Source = OutObject->HasField(TEXT("source")) ? OutObject->GetStringField(TEXT("source")) : FString(UnknownMarker);
 		OutParam.Confidence = OutObject->HasField(TEXT("confidence")) ? OutObject->GetNumberField(TEXT("confidence")) : 0.0;
 
+		// **範囲は書かれていれば持つ。** 無い項目は「動かせない」として扱う。
+		OutParam.bHasMin = OutObject->TryGetNumberField(TEXT("min"), OutParam.Minimum);
+		OutParam.bHasMax = OutObject->TryGetNumberField(TEXT("max"), OutParam.Maximum);
+
 		Accessed.Add(DottedPath, OutParam);
 		return true;
 	}
@@ -235,6 +239,19 @@ namespace ZN6
 			}
 		}
 		return Lowest;
+	}
+
+	const FParam* FVehicleData::ReadParamInfo(const FString& DottedPath,
+	                                          const FString& Unit, FString& OutError)
+	{
+		// **必ず値も読む。** 範囲だけ覗いて confidence の記録を飛ばすと、
+		// 「その値に依存したのに記録が無い」状態になる。
+		double Ignored = 0.0;
+		if (!GetValue(DottedPath, Unit, Ignored, OutError))
+		{
+			return nullptr;
+		}
+		return Accessed.Find(DottedPath);
 	}
 
 	double FVehicleData::ResultConfidence() const

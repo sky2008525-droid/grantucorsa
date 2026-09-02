@@ -1,0 +1,534 @@
+{
+ "traffic_cone": {
+  "name": "Traffic cone",
+  "authors": {
+   "Savino": "modeling"
+  },
+  "license": "CC0",
+  "source": "https://opengameart.org/content/traffic-cone",
+  "file_url": "https://opengameart.org/sites/default/files/high.zip",
+  "md5": "6aa7af159d0a931b03f84690193f0b1b",
+  "fetched": "2026-09-02",
+  "kind": "models",
+  "gltf": "traffic_cone.glb",
+  "original": "high.obj",
+  "size_m": [
+   0.38,
+   0.38,
+   0.7
+  ],
+  "bytes": 744696
+ },
+ "warehouse_32kda": {
+  "name": "Warehouse building, low poly",
+  "authors": {
+   "32kda": "modeling"
+  },
+  "license": "CC0",
+  "source": "https://opengameart.org/content/warehouse-building-low-poly",
+  "file_url": "https://opengameart.org/sites/default/files/warehouse02.zip",
+  "md5": "ef5045faa1971bc32e0ee2ec07b9ca13",
+  "fetched": "2026-09-02",
+  "kind": "models",
+  "style": "low_poly_textured",
+  "gltf_files": [
+   "warehouse02.glb"
+  ],
+  "sizes_m": {
+   "warehouse02.glb": [
+    23.779,
+    52.0,
+    8.2
+   ]
+  },
+  "uniform_scale": null,
+  "size_source": "measured_from_gltf（配布物のまま。実物との照合はしていない）",
+  "bytes": 6468804
+ },
+ "kenney_city_roads": {
+  "name": "City Kit (Roads) 2.1",
+  "authors": {
+   "Kenney": "modeling"
+  },
+  "license": "CC0",
+  "source": "https://opengameart.org/content/city-kit-roads",
+  "file_url": "https://opengameart.org/sites/default/files/kenney_city-kit-roads_0.zip",
+  "md5": "746a3da5bd128c36c2d6cab633843152",
+  "fetched": "2026-09-02",
+  "kind": "models",
+  "style": "low_poly",
+  "gltf_files": [
+   "bridge-pillar-wide.glb",
+   "bridge-pillar.glb",
+   "construction-barrier.glb",
+   "construction-cone.glb",
+   "construction-fence.glb",
+   "construction-light.glb",
+   "dumpster.glb",
+   "light-curved-double.glb",
+   "light-curved.glb",
+   "light-square-double.glb",
+   "light-square.glb",
+   "road-sign-empty-hanging.glb",
+   "road-sign-empty.glb",
+   "road-sign-object-stop.glb",
+   "road-sign-object-street.glb",
+   "road-sign-object-warning.glb",
+   "road-sign-stop.glb",
+   "road-sign-street.glb",
+   "road-sign-warning.glb",
+   "sign-highway-detailed.glb",
+   "sign-highway-wide.glb",
+   "sign-highway.glb",
+   "traffic-light-hanging.glb",
+   "traffic-light-object-hanging.glb",
+   "traffic-light-object-horizontal.glb",
+   "traffic-light-object-vertical.glb",
+   "traffic-light.glb"
+  ],
+  "sizes_m": {
+   "road-sign-stop.glb": [
+    0.57,
+    1.017,
+    3.637
+   ],
+   "road-sign-street.glb": [
+    1.445,
+    1.445,
+    3.496
+   ],
+   "road-sign-warning.glb": [
+    0.569,
+    1.083,
+    3.67
+   ],
+   "road-sign-empty.glb": [
+    0.368,
+    0.368,
+    3.496
+   ],
+   "road-sign-empty-hanging.glb": [
+    0.662,
+    2.171,
+    3.496
+   ],
+   "road-sign-object-stop.glb": [
+    0.57,
+    0.925,
+    0.925
+   ],
+   "road-sign-object-street.glb": [
+    0.313,
+    1.417,
+    0.442
+   ],
+   "road-sign-object-warning.glb": [
+    0.569,
+    0.985,
+    0.985
+   ],
+   "sign-highway.glb": [
+    0.974,
+    7.361,
+    5.207
+   ],
+   "sign-highway-wide.glb": [
+    0.974,
+    7.361,
+    5.207
+   ],
+   "sign-highway-detailed.glb": [
+    0.974,
+    7.361,
+    6.052
+   ],
+   "traffic-light.glb": [
+    0.866,
+    0.662,
+    3.791
+   ],
+   "traffic-light-hanging.glb": [
+    0.866,
+    2.171,
+    3.747
+   ],
+   "traffic-light-object-vertical.glb": [
+    0.718,
+    0.449,
+    1.054
+   ],
+   "traffic-light-object-horizontal.glb": [
+    0.718,
+    1.054,
+    0.449
+   ],
+   "traffic-light-object-hanging.glb": [
+    0.718,
+    0.449,
+    1.054
+   ],
+   "construction-barrier.glb": [
+    0.997,
+    1.656,
+    0.957
+   ],
+   "construction-fence.glb": [
+    0.552,
+    2.76,
+    1.316
+   ],
+   "construction-cone.glb": [
+    0.552,
+    0.552,
+    0.69
+   ],
+   "construction-light.glb": [
+    0.552,
+    0.552,
+    1.721
+   ],
+   "light-square.glb": [
+    0.368,
+    1.748,
+    4.417
+   ],
+   "light-square-double.glb": [
+    0.368,
+    3.128,
+    4.417
+   ],
+   "light-curved.glb": [
+    0.368,
+    1.656,
+    4.969
+   ],
+   "light-curved-double.glb": [
+    0.368,
+    2.944,
+    4.969
+   ],
+   "bridge-pillar.glb": [
+    0.736,
+    0.736,
+    3.68
+   ],
+   "bridge-pillar-wide.glb": [
+    1.031,
+    1.031,
+    3.68
+   ],
+   "dumpster.glb": [
+    2.024,
+    2.724,
+    1.542
+   ]
+  },
+  "uniform_scale": 7.3609,
+  "size_source": "measured_from_gltf（ISO 668 の 20ft コンテナ 6.058 m を基準に キット全体へ等倍 7.3609 を掛けた。個々の物の寸法は実物と照合して いない）",
+  "bytes": 545100
+ },
+ "traffic_road_assets": {
+  "name": "Traffic Road Assets",
+  "authors": {
+   "milkandbanana": "modeling"
+  },
+  "license": "CC0",
+  "source": "https://opengameart.org/content/traffic-road-assets",
+  "file_url": "https://opengameart.org/sites/default/files/traffic_road_assets.zip",
+  "md5": "509b6dfc569c7502da169b3ab1e77972",
+  "fetched": "2026-09-02",
+  "kind": "models",
+  "style": "low_poly_textured",
+  "gltf_files": [
+   "Broken_Traffic_Cone.glb",
+   "Broken_Traffic_Cone_001.glb",
+   "Chipped_Road_Block.glb",
+   "Crush_Barrier.glb",
+   "Crush_Barrier_001.glb",
+   "Road_Block.glb",
+   "Road_Block_001.glb",
+   "Road_Block_004.glb",
+   "Small_Road_Block.glb",
+   "Streetlights.glb",
+   "Streetlights_001.glb",
+   "Warning_Triangle.glb",
+   "Wood_Road_Block_Large.glb",
+   "Wood_Road_Block_Medium.glb",
+   "Wood_Road_Block_Small.glb"
+  ],
+  "sizes_m": {
+   "Crush_Barrier.glb": [
+    1.604,
+    0.601,
+    1.412
+   ],
+   "Crush_Barrier_001.glb": [
+    1.604,
+    0.601,
+    1.412
+   ],
+   "Road_Block.glb": [
+    1.283,
+    0.708,
+    1.283
+   ],
+   "Road_Block_001.glb": [
+    1.283,
+    0.708,
+    1.283
+   ],
+   "Road_Block_004.glb": [
+    1.283,
+    0.642,
+    1.283
+   ],
+   "Chipped_Road_Block.glb": [
+    1.283,
+    0.719,
+    1.355
+   ],
+   "Small_Road_Block.glb": [
+    0.535,
+    0.535,
+    1.47
+   ],
+   "Wood_Road_Block_Large.glb": [
+    7.012,
+    1.662,
+    1.847
+   ],
+   "Wood_Road_Block_Medium.glb": [
+    3.536,
+    1.662,
+    1.847
+   ],
+   "Wood_Road_Block_Small.glb": [
+    1.771,
+    1.662,
+    1.847
+   ],
+   "Streetlights.glb": [
+    1.778,
+    0.567,
+    11.777
+   ],
+   "Streetlights_001.glb": [
+    3.021,
+    0.567,
+    11.805
+   ],
+   "Warning_Triangle.glb": [
+    0.535,
+    0.488,
+    0.593
+   ],
+   "Broken_Traffic_Cone.glb": [
+    0.535,
+    0.535,
+    0.367
+   ],
+   "Broken_Traffic_Cone_001.glb": [
+    0.535,
+    0.535,
+    0.422
+   ]
+  },
+  "uniform_scale": 0.26738,
+  "size_source": "measured_from_gltf（ISO 668 の 20ft コンテナ 6.058 m を基準に キット全体へ等倍 0.26738 を掛けた。個々の物の寸法は実物と照合して いない）",
+  "bytes": 257256
+ },
+ "kenney_city_industrial": {
+  "name": "City Kit (Industrial) 2.0",
+  "authors": {
+   "Kenney": "modeling"
+  },
+  "license": "CC0",
+  "source": "https://opengameart.org/content/city-kit-industrial",
+  "file_url": "https://opengameart.org/sites/default/files/kenney_city-kit-industrial_2.0.zip",
+  "md5": "eb88313b2bd444d63e614509fe518fba",
+  "fetched": "2026-09-02",
+  "kind": "models",
+  "style": "low_poly",
+  "gltf_files": [
+   "building-a.glb",
+   "building-b.glb",
+   "building-c.glb",
+   "building-d.glb",
+   "building-e.glb",
+   "building-f.glb",
+   "building-g.glb",
+   "building-h.glb",
+   "building-i.glb",
+   "building-j.glb",
+   "building-k.glb",
+   "building-l.glb",
+   "building-m.glb",
+   "building-n.glb",
+   "building-o.glb",
+   "building-p.glb",
+   "building-q.glb",
+   "building-r.glb",
+   "building-s.glb",
+   "building-t.glb",
+   "chimney-large.glb",
+   "chimney-medium.glb",
+   "chimney-small.glb",
+   "detail-tank-large.glb",
+   "detail-tank.glb",
+   "shipping-container-a.glb",
+   "shipping-container-b.glb",
+   "shipping-container-c.glb",
+   "water-tower.glb"
+  ],
+  "sizes_m": {
+   "building-a.glb": [
+    15.337,
+    9.142,
+    10.821
+   ],
+   "building-b.glb": [
+    15.337,
+    9.289,
+    10.821
+   ],
+   "building-c.glb": [
+    13.809,
+    15.517,
+    9.201
+   ],
+   "building-d.glb": [
+    6.504,
+    10.452,
+    10.412
+   ],
+   "building-e.glb": [
+    12.393,
+    9.496,
+    12.145
+   ],
+   "building-f.glb": [
+    13.176,
+    9.422,
+    14.17
+   ],
+   "building-g.glb": [
+    12.353,
+    9.448,
+    9.422
+   ],
+   "building-h.glb": [
+    9.729,
+    9.643,
+    5.4
+   ],
+   "building-i.glb": [
+    7.568,
+    9.569,
+    5.4
+   ],
+   "building-j.glb": [
+    7.557,
+    9.569,
+    6.339
+   ],
+   "building-k.glb": [
+    9.59,
+    6.725,
+    5.688
+   ],
+   "building-l.glb": [
+    15.337,
+    13.765,
+    14.17
+   ],
+   "building-m.glb": [
+    9.689,
+    12.514,
+    11.181
+   ],
+   "building-n.glb": [
+    7.189,
+    10.452,
+    14.019
+   ],
+   "building-o.glb": [
+    6.504,
+    9.128,
+    6.757
+   ],
+   "building-p.glb": [
+    12.393,
+    7.302,
+    5.26
+   ],
+   "building-q.glb": [
+    15.752,
+    13.028,
+    6.478
+   ],
+   "building-r.glb": [
+    18.281,
+    9.363,
+    10.254
+   ],
+   "building-s.glb": [
+    15.605,
+    6.745,
+    6.16
+   ],
+   "building-t.glb": [
+    12.673,
+    10.232,
+    7.468
+   ],
+   "shipping-container-a.glb": [
+    2.743,
+    6.055,
+    2.562
+   ],
+   "shipping-container-b.glb": [
+    2.743,
+    6.055,
+    2.562
+   ],
+   "shipping-container-c.glb": [
+    2.743,
+    6.055,
+    2.562
+   ],
+   "water-tower.glb": [
+    6.273,
+    6.123,
+    15.765
+   ],
+   "chimney-large.glb": [
+    7.95,
+    7.95,
+    12.514
+   ],
+   "chimney-medium.glb": [
+    3.312,
+    3.312,
+    14.17
+   ],
+   "chimney-small.glb": [
+    2.208,
+    2.208,
+    5.521
+   ],
+   "detail-tank.glb": [
+    6.242,
+    3.793,
+    3.057
+   ],
+   "detail-tank-large.glb": [
+    11.103,
+    12.134,
+    7.078
+   ]
+  },
+  "uniform_scale": 7.3609,
+  "size_source": "measured_from_gltf（ISO 668 の 20ft コンテナ 6.058 m を基準に キット全体へ等倍 7.3609 を掛けた。個々の物の寸法は実物と照合して いない）",
+  "bytes": 2315832
+ }
+}
