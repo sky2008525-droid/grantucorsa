@@ -801,21 +801,34 @@ bool FZN6TerrainAffectsTheCar::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// **走行域は平ら。** 物理が平面3自由度である以上、行ける場所は平面。
+	// **このコースは縦断を持たない**（物理の基準コースなので平坦のまま）。
+	// したがって走行域の地面は一定でなければならない。
+	//
+	// **沈み込みの値そのものを書かない。** 以前は -0.05 m と直に書いて
+	// いたが、これは `Blender/build_track.py` の `GROUND_SINK_M` を別の
+	// 場所に写した数字で、あちらを 0.15 に直したらここが落ちた。
+	// 見たいのは「一定であること」と「路面より少し下にあること」で、
+	// 何センチかではない。
+	double Lowest = 1e9;
+	double Highest = -1e9;
 	for (double X = -100.0; X <= 420.0; X += 40.0)
 	{
 		for (double Y = 0.0; Y <= 110.0; Y += 20.0)
 		{
 			const double Height = Field.HeightAt(X, Y);
-			TestTrue(
-				*FString::Printf(TEXT("走行域 (%.0f, %.0f) が平ら（%.4f m）"), X, Y, Height),
-				FMath::Abs(Height + 0.05) < 1e-6);
+			Lowest = FMath::Min(Lowest, Height);
+			Highest = FMath::Max(Highest, Height);
 		}
 	}
+	TestTrue(*FString::Printf(TEXT("走行域が平ら（%.4f 〜 %.4f m）"),
+	                          Lowest, Highest),
+	         Highest - Lowest < 1e-6);
+	TestTrue(*FString::Printf(TEXT("地面が路面の少し下にある（%.4f m）"), Lowest),
+	         Lowest < -0.001 && Lowest > -0.5);
 
 	// 遠景には起伏がある（無ければ「地形に沿う」検査に意味が無い）
-	double Lowest = 1e9;
-	double Highest = -1e9;
+	Lowest = 1e9;
+	Highest = -1e9;
 	for (double X = -600.0; X <= 900.0; X += 300.0)
 	{
 		for (double Y = -350.0; Y <= 500.0; Y += 200.0)
@@ -858,7 +871,8 @@ bool FZN6TerrainAffectsTheCar::RunTest(const FString& Parameters)
 	TestTrue(
 		*FString::Printf(TEXT("コース上では地面が平ら（%.4f m）"),
 		                 Actor->GetGroundHeightM()),
-		FMath::Abs(Actor->GetGroundHeightM() + 0.05) < 1e-3);
+		Actor->GetGroundHeightM() < -0.001
+		&& Actor->GetGroundHeightM() > -0.5);
 	TestTrue(TEXT("コース上では地形の傾きがゼロ"),
 	         FMath::Abs(Actor->GetTerrainPitchRad()) < 1e-6
 	         && FMath::Abs(Actor->GetTerrainRollRad()) < 1e-6);

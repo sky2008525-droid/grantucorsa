@@ -130,6 +130,8 @@ class Lighting:
     sky_light_intensity: float = 1.6
 
 
+
+
 @dataclass
 class Environment:
     """1コースぶんの環境。"""
@@ -176,6 +178,20 @@ class Environment:
 
     #: 空と光。
     lighting: "Lighting" = field(default_factory=lambda: Lighting())
+
+    #: Lumen（動的GI）を使うか。
+    #:
+    #: **既定は使う。** 切るのは、そのコースで Lumen が壊れると
+    #: 実測で分かったときだけ。
+    #:
+    #: 都市高速では、Lumen の間接光が画面全体を夜のように暗くする。
+    #: 原因は特定できていない。**切り分けで除外したもの**:
+    #: 霧の色 / 海の色 / 海のタイル分割 / 海そのもの / 橋脚（非一様に
+    #: 伸ばしたインスタンス）/ 光の値（峠と同じにしても暗い）/
+    #: 仮想シャドウマップ。**確実なのは「`r.Lumen.DiffuseIndirect.Allow 0`
+    #: で正しく明るくなる」ことだけ。**
+    #: 同じ engine 設定で峠は正常なので、engine 側の設定ではない。
+    use_lumen_gi: bool = True
 
     #: 地面のテクスチャ（`Tracks/Assets/*/manifest.json` の名前）。
     #:
@@ -348,17 +364,25 @@ ENVIRONMENTS: Dict[str, Environment] = {
     "high_speed_ring": Environment(
         # **午後遅く。** 太陽を低くすると、高架の桁が長い影を落とす。
         # 湾岸の霞をやや強めに。
-        lighting=Lighting(sun_pitch_deg=-28.0, sun_yaw_deg=-115.0,
-                          sun_intensity=8.0,
-                          fog_density=0.0022, fog_height_falloff=0.03,
+        # **太陽は低くしすぎない。** -28 度だと桁の上がほぼ影になり、
+        # 街が見えなかった。午後の斜光くらいに留める。
+        lighting=Lighting(sun_pitch_deg=-44.0, sun_yaw_deg=-60.0,
+                          sun_intensity=9.0,
+                          fog_density=0.0018, fog_height_falloff=0.02,
                           fog_colour=(0.60, 0.58, 0.60),
-                          sky_light_intensity=1.5),
+                          # **Lumen を切ったぶん環境光を下げる。**
+                          # 1.8 のままだと陰影が消えて白飛びした。
+                          sky_light_intensity=0.85),
+        # **このコースだけ Lumen を切る**（上の use_lumen_gi の注記）。
+        use_lumen_gi=False,
         # 街の地面。**草ではなくコンクリート。**
         ground_texture="brushed_concrete_03",
         distant_texture="dirt_floor",
-        # 街なので地形の起伏はほぼ無い。
-        relief_amplitude_m=2.5,
-        relief_wavelength_m=260.0,
+        # **街の地面にも起伏を持たせる。**
+        # 平らな板 1 枚だと Lumen の表面キャッシュが張れず、画面全体が
+        # 暗くなる（実測: Lumen を切ると正常に明るくなった）。
+        relief_amplitude_m=3.5,
+        relief_wavelength_m=95.0,
         distant=DistantTerrain(
             # **基準面を海面より下げる。** そうしないと陸しか出来ず、
             # 水面が地面に隠れて 1 ピクセルも見えない。
@@ -404,48 +428,60 @@ ENVIRONMENTS: Dict[str, Environment] = {
             # -------------------------------------------------------------
 
             # --- 桁の上 ---
-            ("concrete_road_barrier", 6.4, 4.2, (1.0, 1.0), "outside"),
+            # **距離は路面端から**（置き方 "deck"）。中心線からではない。
+            #
+            # 最初これを "outside"/"left"/"right" で書いたため、
+            # 「中心線から half + 2.5 m」の判定に掛かって**5 種類すべてが
+            # 1 個も置かれなかった。** 路面の上は完全に空だった。
+            ("concrete_road_barrier", 1.2, 4.2, (1.0, 1.0), "deck"),
             # 道路照明。0.67 -> 9〜11 m
-            ("kenney_city_roads/light-curved", 6.8, 42.0, (13.0, 16.0), "left"),
+            ("kenney_city_roads/light-curved", 1.6, 42.0, (13.0, 16.0), "deck"),
             # **高速道路の案内標識。** 0.71 -> 6.5〜8 m
-            ("kenney_city_roads/sign-highway", 7.2, 210.0, (9.0, 11.0), "right"),
-            ("kenney_city_roads/sign-highway-wide", 7.2, 340.0,
-             (9.0, 11.0), "left"),
+            ("kenney_city_roads/sign-highway", 2.0, 210.0, (9.0, 11.0), "deck"),
+            ("kenney_city_roads/sign-highway-wide", 2.0, 340.0,
+             (9.0, 11.0), "deck"),
             # 工事規制。0.13 -> 1.0 m
-            ("kenney_city_roads/construction-barrier", 5.6, 320.0,
-             (7.0, 8.5), "right"),
+            ("kenney_city_roads/construction-barrier", 0.8, 320.0,
+             (7.0, 8.5), "deck"),
 
             # --- 桁の下の街 ---
+            #
+            # **距離を倍にした。** 高さ 15〜35 m のビルを 30〜50 m 先に
+            # 置いたら、高さ 14 m の桁から見て視界の両側を塞ぎ、
+            # 渓谷になった。ビルは自分の高さの 3 倍以上離す。
             # **ビルは 15〜35 m。** 桁が 11〜17 m なので、それを越える
             # 高さが要る。越えないと「高架から見下ろす街」にならない。
-            ("kenney_city_industrial/building-a", 46.0, 118.0, (11.0, 20.0), "both"),
-            ("kenney_city_industrial/building-d", 54.0, 134.0, (11.0, 21.0), "both"),
-            ("kenney_city_industrial/building-g", 62.0, 152.0, (12.0, 24.0), "left"),
-            ("kenney_city_industrial/building-k", 48.0, 126.0, (18.0, 34.0), "right"),
-            ("kenney_city_industrial/building-n", 70.0, 168.0, (8.0, 17.0), "both"),
-            ("kenney_city_industrial/building-r", 78.0, 186.0, (11.0, 22.0), "left"),
-            ("kenney_city_industrial/water-tower", 66.0, 290.0, (7.0, 11.0), "right"),
-            ("kenney_city_industrial/chimney-large", 88.0, 340.0,
+            ("kenney_city_industrial/building-a", 86.0, 118.0, (11.0, 20.0), "both"),
+            ("kenney_city_industrial/building-d", 104.0, 134.0, (11.0, 21.0), "both"),
+            ("kenney_city_industrial/building-g", 128.0, 152.0, (12.0, 24.0), "left"),
+            ("kenney_city_industrial/building-k", 94.0, 126.0, (18.0, 34.0), "right"),
+            ("kenney_city_industrial/building-n", 146.0, 168.0, (8.0, 17.0), "both"),
+            ("kenney_city_industrial/building-r", 166.0, 186.0, (11.0, 22.0), "left"),
+            ("kenney_city_industrial/water-tower", 112.0, 290.0, (7.0, 11.0), "right"),
+            ("kenney_city_industrial/chimney-large", 190.0, 340.0,
              (14.0, 22.0), "left"),
-            ("kenney_city_industrial/detail-tank-large", 56.0, 240.0,
+            ("kenney_city_industrial/detail-tank-large", 78.0, 240.0,
              (8.0, 12.0), "right"),
             # コンテナ。0.35 -> 2.6 m
             ("kenney_city_industrial/shipping-container-a", 30.0, 96.0,
              (7.0, 8.0), "both"),
             ("kenney_city_industrial/shipping-container-c", 32.0, 112.0,
              (7.0, 8.0), "left"),
-            ("warehouse_32kda", 40.0, 260.0, (1.0, 1.0), "right"),
+            ("warehouse_32kda", 62.0, 260.0, (1.0, 1.0), "right"),
             # PolyHaven のビル外壁は実寸（29 m）なので等倍。
             # **遠くへ置く。** 近いと壁になって街が見えない。
-            ("modular_urban_apartments_facade", 92.0, 172.0, (1.0, 1.0), "both"),
-            ("modular_factory_facade", 110.0, 210.0, (1.0, 1.0), "left"),
+            ("modular_urban_apartments_facade", 150.0, 172.0, (1.0, 1.0), "both"),
+            ("modular_factory_facade", 200.0, 210.0, (1.0, 1.0), "left"),
             # 街路のもの
             ("kenney_city_roads/light-square", 24.0, 46.0, (11.0, 13.0), "both"),
             ("kenney_city_roads/traffic-light", 22.0, 150.0, (10.0, 12.0), "right"),
             ("kenney_city_roads/road-sign-street", 23.0, 130.0,
              (5.0, 6.5), "left"),
             ("modular_electricity_poles", 30.0, 62.0, (1.0, 1.0), "right"),
-            ("modular_chainlink_fence", 20.0, 4.0, (1.0, 1.0), "both"),
+            # **フェンスは間隔を空ける。**
+            # 4 m 間隔だと 1310 個になり、props の 63% がフェンスだった。
+            # 街ではなくフェンス畑になる。
+            ("modular_chainlink_fence", 21.0, 26.0, (1.0, 1.0), "both"),
             ("power_box_01", 25.0, 96.0, (1.0, 1.0), "both"),
             ("covered_car", 33.0, 128.0, (1.0, 1.0), "both"),
             ("fire_hydrant", 21.0, 104.0, (1.0, 1.0), "left"),

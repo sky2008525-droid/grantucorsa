@@ -9,6 +9,11 @@
 //   2. 実際に描画要素が出ているか（何も描かずに「成功」しないか）
 //   3. メニューの状態遷移が行き止まりにならないか
 //   4. **セッティング画面のスライダーが範囲を超えないか**
+//   5. **HUD の区画が画面から出ない・互いに重ならない**（どの画面サイズでも）
+//   6. **レッドゾーンの境界が `vehicle.json` の redline と一致する**
+//   7. **ベスト周との差と区間タイムが、渡した値と合っているか**
+//
+// 5〜7 は「読みやすいか」ではない。**そこは主観だが、これは主観ではない。**
 
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
@@ -132,19 +137,456 @@ bool FZN6HudPaints::RunTest(const FString& Parameters)
 		{
 			Broken.Utilisation[Wheel] = std::numeric_limits<double>::quiet_NaN();
 		}
+		Broken.Sector = 77;
+		Broken.SteerRad = std::numeric_limits<double>::quiet_NaN();
+		Broken.MaxSteerRad = 0.0;        // ここも 0 割りを誘う
+		Broken.Throttle = std::numeric_limits<double>::infinity();
+		Broken.LapProgress = -3.0;
 		Hud->SetSnapshot(Broken);
 
 		PaintOnce(Hud, Size);
 		TestTrue(TEXT("壊れた値でも描画が落ちない"), true);
+
+		// **握りつぶさない。** 直したことを画面に出せる状態になっている
+		// こと（憲法ルール6）。
+		TestTrue(TEXT("壊れた値を受け取ったことが残る"), Hud->HadInvalidInput());
+		TestFalse(TEXT("壊れた周では差の基準を作らない"), Hud->HasDeltaReference());
 	}
 
-	// --- 極端に小さい画面でも落ちない ---
+	// --- まともな値に戻せば異常の印も消える ---
 	{
 		ZN6::FHudSnapshot Snapshot;
 		Snapshot.Phase = ZN6::ERacePhase::Racing;
+		Snapshot.SpeedKmh = 100.0;
+		Snapshot.EngineRpm = 4000.0;
 		Hud->SetSnapshot(Snapshot);
-		PaintOnce(Hud, FVector2D(64.0, 48.0));
-		TestTrue(TEXT("小さい画面でも描画が落ちない"), true);
+		TestFalse(TEXT("値が戻れば異常の印も消える"), Hud->HadInvalidInput());
+	}
+
+	// --- いろいろな画面サイズで落ちない ---
+	//
+	// **極端に小さい画面も含める。** 目盛りの幅が 0 以下になる。
+	{
+		ZN6::FHudSnapshot Snapshot;
+		Snapshot.Phase = ZN6::ERacePhase::Racing;
+		Snapshot.EngineRpm = 7000.0;
+		Snapshot.SpeedKmh = 180.0;
+		Hud->SetSnapshot(Snapshot);
+
+		for (const FVector2D& Screen : { FVector2D(64.0, 48.0), FVector2D(320.0, 240.0),
+		                                 FVector2D(1280.0, 720.0), FVector2D(3440.0, 1440.0),
+		                                 FVector2D(1080.0, 1920.0) })
+		{
+			PaintOnce(Hud, Screen);
+		}
+		TestTrue(TEXT("どの画面サイズでも描画が落ちない"), true);
+	}
+
+	// --- redline が来ていないとき ---
+	//
+	// **既定値でごまかさない。** 目盛りは無効になり、描画は続く。
+	{
+		ZN6::FHudSnapshot Snapshot;
+		Snapshot.Phase = ZN6::ERacePhase::Racing;
+		Snapshot.RedlineRpm = 0.0;
+		Snapshot.EngineRpm = 3000.0;
+		Hud->SetSnapshot(Snapshot);
+		TestTrue(TEXT("redline が無くても描ける"), PaintOnce(Hud, Size) > 5);
+	}
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6HudLayout,
+	"ZN6.UI.HUD の区画が画面から出ない・重ならない",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6HudLayout::RunTest(const FString& Parameters)
+{
+	// **「読めるか」は主観だが、「画面から出ているか」は主観ではない。**
+	//
+	// 位置を各 Paint 関数に散らしていたときは、画面サイズを変えるたびに
+	// どこかが重なっていた。区画を1箇所で決めたので、ここで機械的に見る。
+	const FVector2D Screens[] = {
+		FVector2D(1920.0, 1080.0),   // 基準
+		FVector2D(1600.0,  900.0),   // 撮影に使うサイズ
+		FVector2D(1280.0,  720.0),
+		FVector2D(3440.0, 1440.0),   // 横長
+		FVector2D(1080.0, 1920.0),   // 縦長
+		FVector2D(1024.0,  768.0),   // 4:3
+		FVector2D( 640.0,  480.0),
+		FVector2D(  64.0,   48.0),   // 極端に小さい
+	};
+
+	constexpr float Epsilon = 0.05f;
+	int32 Problems = 0;
+
+	for (const FVector2D& Screen : Screens)
+	{
+		const FVector2f Size(static_cast<float>(Screen.X), static_cast<float>(Screen.Y));
+		const SZN6Hud::FLayout Layout = SZN6Hud::ComputeLayout(Size);
+		const TArray<FSlateRect> Rects = Layout.All();
+
+		for (int32 Index = 0; Index < Rects.Num(); ++Index)
+		{
+			const FSlateRect& R = Rects[Index];
+
+			if (R.Right < R.Left || R.Bottom < R.Top)
+			{
+				AddError(FString::Printf(TEXT("%s が裏返っている（%0.0fx%0.0f）"),
+				                         SZN6Hud::FLayout::NameOf(Index),
+				                         Screen.X, Screen.Y));
+				++Problems;
+			}
+
+			if (R.Left < -Epsilon || R.Top < -Epsilon
+			    || R.Right > Size.X + Epsilon || R.Bottom > Size.Y + Epsilon)
+			{
+				AddError(FString::Printf(
+					TEXT("%s が画面から出た（%0.0fx%0.0f）: %0.1f,%0.1f - %0.1f,%0.1f"),
+					SZN6Hud::FLayout::NameOf(Index), Screen.X, Screen.Y,
+					R.Left, R.Top, R.Right, R.Bottom));
+				++Problems;
+			}
+
+			for (int32 Other = Index + 1; Other < Rects.Num(); ++Other)
+			{
+				const FSlateRect& B = Rects[Other];
+				const bool bApart = R.Right <= B.Left + Epsilon
+				                 || B.Right <= R.Left + Epsilon
+				                 || R.Bottom <= B.Top + Epsilon
+				                 || B.Bottom <= R.Top + Epsilon;
+				if (!bApart)
+				{
+					AddError(FString::Printf(
+						TEXT("%s と %s が重なった（%0.0fx%0.0f）"),
+						SZN6Hud::FLayout::NameOf(Index),
+						SZN6Hud::FLayout::NameOf(Other), Screen.X, Screen.Y));
+					++Problems;
+				}
+			}
+		}
+	}
+
+	TestEqual(TEXT("画面外・重なりは 0 件"), Problems, 0);
+	return Problems == 0;
+}
+
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6HudRedline,
+	"ZN6.UI.レッドゾーンの境界が vehicle.json の redline と一致する",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6HudRedline::RunTest(const FString& Parameters)
+{
+	// **HUD は自前の redline を持たない。**
+	//
+	// 持つと `vehicle.json` を直したときに、物理だけが変わって画面が
+	// 古い値のまま残る。「7000 くらいから赤」のような定数を HUD に
+	// 書かないための検査。
+	ZN6::FVehicleData Data;
+	FString Error;
+	if (!Data.LoadFromFile(UiRepoRoot() / TEXT("Vehicles/ZN6/vehicle.json"), Error))
+	{
+		AddError(FString::Printf(TEXT("vehicle.json を読めない: %s"), *Error));
+		return false;
+	}
+
+	double Redline = 0.0;
+	if (!Data.GetValue(TEXT("engine.redline"), TEXT("1/min"), Redline, Error))
+	{
+		AddError(FString::Printf(TEXT("engine.redline を読めない: %s"), *Error));
+		return false;
+	}
+
+	const SZN6Hud::FTachScale Scale = SZN6Hud::MakeTachScale(Redline);
+	TestTrue(TEXT("車の redline で目盛りが作れる"), Scale.IsValid());
+	TestTrue(*FString::Printf(TEXT("赤帯は redline (%0.0f) から始まる"), Redline),
+	         FMath::IsNearlyEqual(Scale.RedlineRpm, Redline, 1e-6));
+
+	// **赤帯に幅があること。** 幅が無いと線1本になって見えない
+	// （前の版がそうなっていた）。
+	TestTrue(TEXT("目盛りの右端は redline より上"), Scale.ScaleMaxRpm > Redline);
+	TestTrue(TEXT("赤帯が目盛りの端に潰れていない"),
+	         Scale.Fraction(Redline) > 0.5 && Scale.Fraction(Redline) < 0.99);
+
+	// シフトランプは redline の手前から。**演出なので値そのものは問わない。**
+	TestTrue(TEXT("シフトランプは redline の手前で点き始める"),
+	         Scale.ShiftStartRpm > 0.0 && Scale.ShiftStartRpm < Redline);
+
+	// **別の redline を渡せば境界も動くこと。** 動かなければ、
+	// HUD がどこかに自前の値を持っている。
+	for (const double Other : { 4500.0, 6000.0, 7400.0, 9000.0, 15000.0 })
+	{
+		const SZN6Hud::FTachScale Test = SZN6Hud::MakeTachScale(Other);
+		if (!FMath::IsNearlyEqual(Test.RedlineRpm, Other, 1e-6))
+		{
+			AddError(FString::Printf(
+				TEXT("redline %0.0f を渡したのに赤帯の始まりが %0.0f だった"),
+				Other, Test.RedlineRpm));
+			return false;
+		}
+	}
+	TestTrue(TEXT("赤帯の始まりは渡された redline に追従する"), true);
+
+	// **無ければ「無い」と扱う。** 既定値で埋めない。
+	TestFalse(TEXT("redline 0 では目盛りを作らない"),
+	          SZN6Hud::MakeTachScale(0.0).IsValid());
+	TestFalse(TEXT("redline が負では目盛りを作らない"),
+	          SZN6Hud::MakeTachScale(-1.0).IsValid());
+	TestFalse(TEXT("redline が NaN では目盛りを作らない"),
+	          SZN6Hud::MakeTachScale(
+	              std::numeric_limits<double>::quiet_NaN()).IsValid());
+
+	// --- シフトランプ ---
+	//
+	// **点いた瞬間を画面で撮るのは難しい**（1速で 6660〜7400rpm を通る
+	// 時間はごく短い）ので、ここは目で見るのではなく数で押さえる。
+	{
+		const int32 Last = SZN6Hud::ShiftLightCount - 1;
+
+		// 点き始めの手前では1つも点かない。
+		for (int32 Index = 0; Index < SZN6Hud::ShiftLightCount; ++Index)
+		{
+			if (SZN6Hud::IsShiftLightLit(Scale, Scale.ShiftStartRpm - 1.0, Index))
+			{
+				AddError(FString::Printf(
+					TEXT("点き始め (%0.0f rpm) の手前でランプ %d が点いた"),
+					Scale.ShiftStartRpm, Index));
+				return false;
+			}
+		}
+
+		// **redline でちょうど全部点く。**
+		for (int32 Index = 0; Index < SZN6Hud::ShiftLightCount; ++Index)
+		{
+			if (!SZN6Hud::IsShiftLightLit(Scale, Redline, Index))
+			{
+				AddError(FString::Printf(
+					TEXT("redline (%0.0f rpm) でランプ %d が点いていない"),
+					Redline, Index));
+				return false;
+			}
+		}
+		TestFalse(TEXT("redline の少し手前では最後のランプが点かない"),
+		          SZN6Hud::IsShiftLightLit(Scale, Redline - 1.0, Last));
+
+		// 順に点くこと。**下が消えたまま上が点かない。**
+		const double Middle = (Scale.ShiftStartRpm + Redline) * 0.5;
+		bool bSeenUnlit = false;
+		for (int32 Index = 0; Index < SZN6Hud::ShiftLightCount; ++Index)
+		{
+			const bool bLit = SZN6Hud::IsShiftLightLit(Scale, Middle, Index);
+			if (!bLit) { bSeenUnlit = true; }
+			else if (bSeenUnlit)
+			{
+				AddError(TEXT("消えているランプの先が点いた（順に点いていない）"));
+				return false;
+			}
+		}
+		TestTrue(TEXT("シフトランプは下から順に点く"), true);
+
+		// **redline が変われば点き始めも変わる。**
+		const SZN6Hud::FTachScale Low = SZN6Hud::MakeTachScale(5000.0);
+		TestFalse(TEXT("redline 5000 なら 6600rpm 相当の閾値では点かない"),
+		          SZN6Hud::IsShiftLightLit(Low, 4400.0, 0));
+		TestTrue(TEXT("redline 5000 なら 5000rpm で全部点く"),
+		         SZN6Hud::IsShiftLightLit(Low, 5000.0, Last));
+
+		// 目盛りが無効なら点かない。
+		TestFalse(TEXT("redline が無ければシフトランプも点かない"),
+		          SZN6Hud::IsShiftLightLit(SZN6Hud::MakeTachScale(0.0), 9999.0, 0));
+	}
+
+	// **HUD へ渡ってくる既定値も車と一致していること。**
+	//
+	// 現状 `ZN6VehicleActor` は `FHudSnapshot::RedlineRpm` を埋めていない。
+	// つまり画面に出ているのはこの既定値である。`vehicle.json` を直したのに
+	// ここが取り残されたら、この検査が落ちる。
+	const ZN6::FHudSnapshot Default;
+	TestTrue(*FString::Printf(
+	             TEXT("FHudSnapshot の既定 redline (%0.0f) が vehicle.json (%0.0f) と一致する"),
+	             Default.RedlineRpm, Redline),
+	         FMath::IsNearlyEqual(Default.RedlineRpm, Redline, 1e-6));
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZN6HudDelta,
+	"ZN6.UI.ベスト周との差と区間タイムが渡した値と合う",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZN6HudDelta::RunTest(const FString& Parameters)
+{
+	// **差は推測ではなく引き算であること。**
+	//
+	// 60 秒で1周したあと、63 秒ペースで走れば、中間地点での差は +1.5 秒に
+	// なるはず。ずれるなら、どこかで値を作っている。
+	TSharedRef<SZN6Hud> Hud = SNew(SZN6Hud);
+
+	constexpr int32 Steps = 600;
+	TArray<ZN6::FLapRecord> Laps;
+
+	auto RunLap = [&](double LapSeconds, double SessionStartS)
+	{
+		for (int32 Index = 0; Index <= Steps; ++Index)
+		{
+			const double Fraction = static_cast<double>(Index) / Steps;
+			ZN6::FHudSnapshot Snapshot;
+			Snapshot.Phase = ZN6::ERacePhase::Racing;
+			Snapshot.CurrentLap = Laps.Num() + 1;
+			Snapshot.LapProgress = Fraction;
+			Snapshot.LapTimeS = LapSeconds * Fraction;
+			Snapshot.SessionTimeS = SessionStartS + LapSeconds * Fraction;
+			Snapshot.Sector = (Fraction < 1.0 / 3.0) ? 0
+			                : (Fraction < 2.0 / 3.0) ? 1 : 2;
+			Snapshot.Laps = Laps;
+			Snapshot.BestLapS = Laps.Num() > 0 ? Laps[0].TimeS : 0.0;
+			Hud->SetSnapshot(Snapshot);
+		}
+	};
+
+	auto CloseLap = [&](double LapSeconds, bool bBest)
+	{
+		ZN6::FLapRecord Record;
+		Record.LapNumber = Laps.Num() + 1;
+		Record.TimeS = LapSeconds;
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			Record.SectorS[Index] = LapSeconds / 3.0;
+		}
+		Record.bBest = bBest;
+		Laps.Add(Record);
+
+		ZN6::FHudSnapshot Snapshot;
+		Snapshot.Phase = ZN6::ERacePhase::Racing;
+		Snapshot.CurrentLap = Laps.Num() + 1;
+		Snapshot.LapProgress = 0.0;
+		Snapshot.LapTimeS = 0.0;
+		Snapshot.SessionTimeS = LapSeconds * Laps.Num();
+		Snapshot.Sector = 0;
+		Snapshot.Laps = Laps;
+		Snapshot.BestLapS = LapSeconds;
+		Hud->SetSnapshot(Snapshot);
+	};
+
+	// --- 基準になる周が無いうちは差を出さない ---
+	TestFalse(TEXT("走り出す前は差の基準が無い"), Hud->HasDeltaReference());
+
+	// --- 1周目: 60 秒 ---
+	RunLap(60.0, 0.0);
+	TestFalse(TEXT("ゴールするまでは差の基準が無い"), Hud->HasDeltaReference());
+	CloseLap(60.0, /*bBest=*/true);
+	TestTrue(TEXT("ベスト周ができたら差の基準になる"), Hud->HasDeltaReference());
+
+	// **周が閉じた直後は、その周の区間タイムを出しておく。**
+	TestTrue(*FString::Printf(TEXT("直前の周の S1 が出る（%0.3f）"),
+	                          Hud->CurrentSectorTimeS(0)),
+	         FMath::IsNearlyEqual(Hud->CurrentSectorTimeS(0), 20.0, 1e-6));
+
+	// --- 2周目: 63 秒ペース。中間で +1.5 秒のはず ---
+	{
+		ZN6::FHudSnapshot Snapshot;
+		Snapshot.Phase = ZN6::ERacePhase::Racing;
+		Snapshot.CurrentLap = 2;
+		Snapshot.Laps = Laps;
+		Snapshot.BestLapS = 60.0;
+
+		// 区間が変わるところまで進める（S1 が刻まれる）
+		for (int32 Index = 0; Index <= Steps; ++Index)
+		{
+			const double Fraction = static_cast<double>(Index) / Steps;
+			if (Fraction > 0.5)
+			{
+				break;
+			}
+			Snapshot.LapProgress = Fraction;
+			Snapshot.LapTimeS = 63.0 * Fraction;
+			Snapshot.SessionTimeS = 60.0 + 63.0 * Fraction;
+			Snapshot.Sector = (Fraction < 1.0 / 3.0) ? 0 : 1;
+			Hud->SetSnapshot(Snapshot);
+		}
+
+		// ビンは 256 段なので、1 段ぶん（60/255 = 0.24 秒）の量子化誤差が乗る。
+		const double Delta = Hud->LiveDeltaS();
+		TestTrue(*FString::Printf(TEXT("中間での差が +1.5 秒付近（%+0.3f）"), Delta),
+		         FMath::Abs(Delta - 1.5) < 0.3);
+
+		// 区間タイム。60 秒周の S1 は 20 秒、63 秒ペースなら 21 秒。
+		const double S1 = Hud->CurrentSectorTimeS(0);
+		TestTrue(*FString::Printf(TEXT("2周目の S1 が 21 秒付近（%0.3f）"), S1),
+		         FMath::Abs(S1 - 21.0) < 0.3);
+		// **遅かった区間はベストにならない。** 前の周の 20 秒が残る。
+		TestFalse(TEXT("遅い区間で自己ベストを塗り替えない"),
+		          FMath::IsNearlyEqual(S1, 20.0, 0.05));
+	}
+
+	// --- 同じペースで走れば差はほぼ 0 ---
+	{
+		TSharedRef<SZN6Hud> Same = SNew(SZN6Hud);
+		TArray<ZN6::FLapRecord> SameLaps;
+
+		auto Feed = [&](double LapSeconds, double SessionStartS, double UpTo)
+		{
+			for (int32 Index = 0; Index <= Steps; ++Index)
+			{
+				const double Fraction = static_cast<double>(Index) / Steps;
+				if (Fraction > UpTo)
+				{
+					break;
+				}
+				ZN6::FHudSnapshot Snapshot;
+				Snapshot.Phase = ZN6::ERacePhase::Racing;
+				Snapshot.CurrentLap = SameLaps.Num() + 1;
+				Snapshot.LapProgress = Fraction;
+				Snapshot.LapTimeS = LapSeconds * Fraction;
+				Snapshot.SessionTimeS = SessionStartS + LapSeconds * Fraction;
+				Snapshot.Sector = (Fraction < 1.0 / 3.0) ? 0
+				                : (Fraction < 2.0 / 3.0) ? 1 : 2;
+				Snapshot.Laps = SameLaps;
+				Same->SetSnapshot(Snapshot);
+			}
+		};
+
+		Feed(60.0, 0.0, 1.0);
+
+		ZN6::FLapRecord Record;
+		Record.LapNumber = 1;
+		Record.TimeS = 60.0;
+		Record.SectorS[0] = Record.SectorS[1] = Record.SectorS[2] = 20.0;
+		Record.bBest = true;
+		SameLaps.Add(Record);
+		{
+			ZN6::FHudSnapshot Snapshot;
+			Snapshot.Phase = ZN6::ERacePhase::Racing;
+			Snapshot.CurrentLap = 2;
+			Snapshot.Laps = SameLaps;
+			Snapshot.SessionTimeS = 60.0;
+			Same->SetSnapshot(Snapshot);
+		}
+
+		Feed(60.0, 60.0, 0.5);
+		TestTrue(*FString::Printf(TEXT("同じペースなら差はほぼ 0（%+0.3f）"),
+		                          Same->LiveDeltaS()),
+		         FMath::Abs(Same->LiveDeltaS()) < 0.3);
+	}
+
+	// --- メニューへ戻したら忘れる ---
+	{
+		ZN6::FHudSnapshot Snapshot;
+		Snapshot.Phase = ZN6::ERacePhase::Menu;
+		Hud->SetSnapshot(Snapshot);
+		TestFalse(TEXT("メニューへ戻ると差の基準を捨てる"), Hud->HasDeltaReference());
+		TestTrue(TEXT("メニューへ戻ると区間タイムも消える"),
+		         Hud->CurrentSectorTimeS(0) == 0.0);
 	}
 
 	return true;

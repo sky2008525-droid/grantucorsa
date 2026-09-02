@@ -181,6 +181,10 @@ namespace ZN6
 		// **当たり判定が使う。** 質量と慣性を当たり判定側で持たせると、
 		// vehicle.json とずれた値で衝突を解くことになる。
 		double GetMassKg() const { return MassKg; }
+
+		/** エンジン。**HUD がレッドラインとアイドルを読むのに使う。**
+		 *  表示が実データから切れないよう、値を写さず参照で渡す。 */
+		const FEngine& GetEngine() const { return Engine; }
 		double GetIzzKgm2() const { return IzzKgm2; }
 
 	private:

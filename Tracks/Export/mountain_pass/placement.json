@@ -32,7 +32,8 @@
    0.7,
    0.8
   ],
-  "sky_light_intensity": 1.9
+  "sky_light_intensity": 1.9,
+  "use_lumen_gi": true
  },
  "kerb_spans": 5,
  "species": [

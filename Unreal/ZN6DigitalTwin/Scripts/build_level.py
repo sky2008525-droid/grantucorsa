@@ -571,9 +571,19 @@ def build_track_materials():
     # 海。**テクスチャが無いので色で塗る。**
     # 水のテクスチャは PolyHaven の textures に入っていない。
     # board のような平らな青にせず、粗さを下げて空を映すようにする。
+    # **黒くしすぎない。**
+    #
+    # 最初 (0.012, 0.035, 0.055) にした。水は暗い、という理屈だったが、
+    # **水が暗く見えるのは空を映しているから**であって、それ自体が
+    # 黒いからではない。ここには鏡面反射を解く仕組みが無いので、
+    # 黒い板は黒いままになる。
+    #
+    # しかもこの板は 6.8 km 四方ある。SkyLight は実時間で周囲を取り込む
+    # ので、**視界の下半分が真っ黒になり環境光が落ちて、コース全体が
+    # 夜のように暗くなった**（車は 55 km/h で正常に走っていた）。
     sea = make_colour_material("M_TrackSea",
-                               unreal.LinearColor(0.012, 0.035, 0.055, 1.0),
-                               roughness=0.08, metallic=0.0)
+                               unreal.LinearColor(0.055, 0.115, 0.165, 1.0),
+                               roughness=0.22, metallic=0.0)
 
     log("マテリアル: road=%s kerb=%s ground=%s distant=%s structure=%s"
         % (road.get_name() if road else "None",
@@ -747,11 +757,16 @@ def place_lighting(settings=None):
             "fog_density", settings.get("fog_density", 0.0008))
         fog.component.set_editor_property(
             "fog_height_falloff", settings.get("fog_height_falloff", 0.05))
-        colour = settings.get("fog_colour")
-        if colour:
-            fog.component.set_editor_property(
-                "fog_inscattering_luminance",
-                unreal.LinearColor(colour[0], colour[1], colour[2], 1.0))
+        # **霧の色は上書きしない。**
+        #
+        # `fog_inscattering_luminance` は**絶対輝度**（cd/m^2 の桁）で、
+        # 色として 0.6 のような値を入れると「ほぼ真っ黒な霧」になる。
+        # 実際、都市高速で 55 秒地点の画面が**完全な黒**になった
+        # （車は 55 km/h で正常に走っていた）。
+        #
+        # 既定のままなら空の色から自動で決まる。**色で雰囲気を作らず、
+        # 濃さと高さ減衰だけで作る**（それで足りている）。
+        # placement.json の fog_colour は残してあるが、ここでは使わない。
 
     # **空は SkyAtmosphere（手続き）で描く。**
     #
@@ -761,6 +776,40 @@ def place_lighting(settings=None):
     #
     # **HDRI はアセットとして残してある。** 環境光の精度を上げたくなったら
     # SkyLight のキューブマップに使う（Tracks/Assets/polyhaven に取得済み）。
+    # **コースによっては Lumen を切る。**
+    #
+    # 都市高速では Lumen の間接光が画面全体を夜のように暗くする。
+    # 原因は特定できていない（除外できたものは `Tracks/environment.py`
+    # の `use_lumen_gi` に列挙してある）。**確実なのは
+    # `r.Lumen.DiffuseIndirect.Allow 0` で正しく明るくなることだけ。**
+    #
+    # コンソール変数はプロジェクト全体に効いてしまうので、
+    # **無限範囲の PostProcessVolume** でこのレベルだけ方式を変える。
+    # これが UE でレベルごとに GI を切り替える正規の手段である。
+    if not settings.get("use_lumen_gi", True):
+        volume = spawn_class(unreal.PostProcessVolume,
+                             unreal.Vector(0.0, 0.0, 0.0),
+                             unreal.Rotator(0.0, 0.0, 0.0), "NoLumenGI")
+        if volume is not None:
+            volume.set_editor_property("unbound", True)
+            post = volume.get_editor_property("settings")
+            post.set_editor_property(
+                "override_dynamic_global_illumination_method", True)
+            post.set_editor_property(
+                "dynamic_global_illumination_method",
+                # **「なし」ではなくスクリーンスペースにする。**
+                # 完全に切ると陰影が消えて露出が上がり、画面全体が
+                # 白飛びした（実際そうなった）。スクリーンスペースなら
+                # 遮蔽が残り、Lumen のような壊れ方もしない。
+                unreal.DynamicGlobalIlluminationMethod.SCREEN_SPACE)
+            post.set_editor_property("override_reflection_method", True)
+            post.set_editor_property(
+                "reflection_method", unreal.ReflectionMethod.SCREEN_SPACE)
+            volume.set_editor_property("settings", post)
+            log("Lumen を切った（このレベルのみ / PostProcessVolume）")
+        else:
+            unreal.log_error("[ZN6 level] PostProcessVolume を作れない")
+
     atmosphere = spawn_class(unreal.SkyAtmosphere, unreal.Vector(0.0, 0.0, 0.0),
                              unreal.Rotator(0.0, 0.0, 0.0), "SkyAtmosphere")
 

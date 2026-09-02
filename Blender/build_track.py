@@ -115,12 +115,23 @@ GROUND_ROAD_CORRIDOR_M = 14.0
 GROUND_ROAD_BLEND_M = 26.0
 
 # 高架の桁が路面の外へ何 m 張り出しているか [m]（片側）。
-# **路肩ぶん。** ここまでは路面と同じ高さで、車が乗っていられる。
-VIADUCT_DECK_SHOULDER_M = 2.5
+#
+# **2.5 m では足りなかった。**
+#
+# 地面の格子は 4 m 刻みである。幅 9.5 m の路面に 2.5 m の路肩だと
+# 桁の全幅が 14.5 m しかなく、格子 3.6 個ぶんしかない。そこへ 3 m で
+# 落ちる縁を入れると、**双一次補間が落ち込みを桁の上まで引きずる。**
+#
+# 実測: 中心線で 13.89 m、路面端（4.75 m）で **13.43 m**、6 m で 12.94 m。
+# 路面は 14.04 m で平らなのに地面が 0.6 m 下がっていた。車の外側の
+# 車輪が路面から落ちて引っかかり、**1 km/h から加速できなくなった。**
+#
+# 格子で表せる幅まで広げる。実際の高架も車道より桁のほうが広い。
+VIADUCT_DECK_SHOULDER_M = 7.0
 
 # 桁の縁から下の地面まで落ちきる距離 [m]。
-# **短くする。** 長いと高架の縁ではなく土手に見える。
-VIADUCT_EDGE_DROP_M = 3.0
+# **格子 2 個ぶんは要る。** 短いと補間が桁の上へ食い込む。
+VIADUCT_EDGE_DROP_M = 8.0
 
 # 地面を路面より何 m 下げるか。
 #
@@ -569,12 +580,34 @@ PIER_SPACING_M = 30.0
 PIER_WIDTH_M = 2.2
 PIER_DEPTH_M = 1.6
 
+#: 床版（桁）の幅 [m]（路面の外へ片側何 m 張り出すか）。
+#:
+#: **これが無かったので高架に見えなかった。**
+#: 路面は厚さ 14 cm のリボンでしかなく、その下は空だった。橋脚は
+#: 太さ 2 m の棒が離れて立つだけで、桁が無いので「宙に浮いた帯」に
+#: しか見えない。運転席から見て高い所を走っている感じが出ない。
+#:
+#: 実際の都市高速は、車道の外へ地覆と点検路ぶん張り出した床版を持ち、
+#: その下に 2〜3 m の主桁がある。
+GIRDER_OVERHANG_M = 1.75
+
+#: 主桁の高さ [m]（床版の下面から）。
+#: 都市高速の鋼箱桁はこの桁（2〜3 m）にある。**実測ではない。**
+GIRDER_DEPTH_M = 2.2
+
+#: 床版そのものの厚み [m]。
+GIRDER_SLAB_M = 0.45
+
+#: 主桁の幅 [m]（片側）。床版より内側に絞る（箱桁の形）。
+GIRDER_WEB_INSET_M = 1.6
+
 #: 遮音壁の高さ [m]（路面から）。**桁の上に立つ。**
 NOISE_WALL_HEIGHT_M = 2.6
 NOISE_WALL_OFFSET_M = 1.2
 
 
-def build_viaduct(points, width_m, ground_level_m, piers=True, wall=True):
+def build_viaduct(points, width_m, ground_level_m, piers=True, wall=True,
+                  girder=True):
     """高架の橋脚と遮音壁を立てる。
 
     **「高さがある状態にしてください」への答えがここ。**
@@ -590,6 +623,41 @@ def build_viaduct(points, width_m, ground_level_m, piers=True, wall=True):
     pier_step = max(int(PIER_SPACING_M / spacing), 1)
     count = len(points)
     stats = {"faces": 0}
+
+    def ribbon(lateral_a, lateral_b, drop_a, drop_b, flip=False):
+        """路面に沿った帯を1枚張る。
+
+        `lateral` は中心線からの横位置（正が左）、`drop` は路面から
+        下へどれだけ下げるか。桁も床版もこの繰り返しで出来ている。
+        """
+        previous = None
+        for index in range(count + 1):
+            p = points[index % count]
+            heading = p["heading_rad"]
+            z = p.get("z_m", 0.0)
+            nx = -math.sin(heading)
+            ny = math.cos(heading)
+            current = (
+                bm.verts.new((p["x_m"] + nx * lateral_a,
+                              p["y_m"] + ny * lateral_a, z - drop_a)),
+                bm.verts.new((p["x_m"] + nx * lateral_b,
+                              p["y_m"] + ny * lateral_b, z - drop_b)),
+                p["s_m"])
+            if previous is not None:
+                quad = (previous[0], previous[1], current[1], current[0])
+                if flip:
+                    quad = tuple(reversed(quad))
+                try:
+                    face = bm.faces.new(quad)
+                    for loop in face.loops:
+                        along = (previous[2] if loop.vert in previous[:2]
+                                 else current[2]) / 6.0
+                        outer = loop.vert in (previous[1], current[1])
+                        loop[uv_layer].uv = (along, 1.0 if outer else 0.0)
+                    stats["faces"] += 1
+                except ValueError:
+                    pass
+            previous = current
 
     def box(cx, cy, z_low, z_high, hx, hy, heading):
         cos_h, sin_h = math.cos(heading), math.sin(heading)
@@ -610,12 +678,38 @@ def build_viaduct(points, width_m, ground_level_m, piers=True, wall=True):
                 loop[uv_layer].uv = (0.0, 0.0)
             stats["faces"] += 1
 
+    if girder:
+        # **床版と主桁。** 路面の下に実体を作る。
+        #
+        # 断面（片側ぶん。左右対称）:
+        #
+        #     路面 ────────────────┐ half + 張り出し
+        #     床版下面 ────────────┘ 厚み GIRDER_SLAB_M
+        #     主桁の側面 ──┐        （床版より内側へ絞る）
+        #     主桁下面 ────┘        深さ GIRDER_DEPTH_M
+        edge = half + GIRDER_OVERHANG_M
+        web = max(edge - GIRDER_WEB_INSET_M, 0.5)
+        slab = GIRDER_SLAB_M
+        bottom = slab + GIRDER_DEPTH_M
+
+        for side in (+1.0, -1.0):
+            flip = side < 0.0
+            # 床版の小口（縦の面）
+            ribbon(edge * side, edge * side, 0.0, slab, flip)
+            # 床版の下面（張り出しの裏）
+            ribbon(edge * side, web * side, slab, slab, not flip)
+            # 主桁の側面
+            ribbon(web * side, web * side, slab, bottom, flip)
+        # 主桁の下面
+        ribbon(web, -web, bottom, bottom, True)
+
     if piers:
         for index in range(0, count, pier_step):
             p = points[index]
             z = p.get("z_m", 0.0)
-            # **桁の下面まで。** 路面の厚みぶん下げる。
-            box(p["x_m"], p["y_m"], ground_level_m - 1.0, z - ROAD_THICKNESS_M,
+            # **桁の下面まで。** 床版と主桁の高さぶん下げる。
+            top = z - (GIRDER_SLAB_M + GIRDER_DEPTH_M)
+            box(p["x_m"], p["y_m"], ground_level_m - 1.0, top,
                 PIER_DEPTH_M / 2.0, PIER_WIDTH_M / 2.0, p["heading_rad"])
 
     if wall:
@@ -658,12 +752,25 @@ def build_viaduct(points, width_m, ground_level_m, piers=True, wall=True):
     return obj, stats["faces"]
 
 
-def build_sea(extent, distant, sea_level_m):
-    """水面。**1 枚の板。**
+#: 水面 1 枚あたりの大きさ [m]。**1 枚の巨大な板にしない。**
+SEA_TILE_M = 320.0
 
-    起伏を付けない。付けると遠景の地形と交差して、水面が斑に切れる。
-    波は静止画では見えないうえ、動かすには物理と関係ない更新が要る。
-    **見えるところだけを作る**（憲法ルール18: 演出）。
+
+def build_sea(extent, distant, sea_level_m):
+    """水面。**細かく割った板。**
+
+    起伏は付けない。付けると遠景の地形と交差して水面が斑に切れる。
+
+    **1 枚の巨大な板にしてはいけない。**
+
+    最初は 6.8 km 四方の四角形 1 枚で作った。結果、**コース全体が夜の
+    ように暗くなった**（車は 55 km/h で正常に走っていた）。
+    切り分けると Lumen を切れば明るくなったので、Lumen の間接光が
+    原因と分かった。Lumen は面ごとに表面キャッシュを張るが、
+    **6.8 km の面 1 枚にはまともなカードが乗らず、黒い間接光を
+    広範囲に返す。**
+
+    面を `SEA_TILE_M` ごとに割れば、1 枚あたりが普通の大きさになる。
     """
     x0, x1, y0, y1 = extent
     reach = distant.reach_m if distant else 1500.0
@@ -673,16 +780,38 @@ def build_sea(extent, distant, sea_level_m):
     sx0, sx1 = x0 - margin, x1 + margin
     sy0, sy1 = y0 - margin, y1 + margin
 
+    nx = max(int((sx1 - sx0) / SEA_TILE_M) + 1, 2)
+    ny = max(int((sy1 - sy0) / SEA_TILE_M) + 1, 2)
+    step_x = (sx1 - sx0) / (nx - 1)
+    step_y = (sy1 - sy0) / (ny - 1)
+
     mesh = bpy.data.meshes.new("TrackSea")
     bm = bmesh.new()
     uv_layer = bm.loops.layers.uv.new("UVMap")
 
-    corners = [(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1)]
-    verts = [bm.verts.new((x, y, sea_level_m)) for x, y in corners]
-    face = bm.faces.new(verts)
+    grid = []
+    for iy in range(ny):
+        row = []
+        y = sy0 + iy * step_y
+        for ix in range(nx):
+            x = sx0 + ix * step_x
+            row.append(bm.verts.new((x, y, sea_level_m)))
+        grid.append(row)
+    bm.verts.ensure_lookup_table()
+
     scale = 1.0 / 90.0
-    for loop in face.loops:
-        loop[uv_layer].uv = (loop.vert.co.x * scale, loop.vert.co.y * scale)
+    faces = 0
+    for iy in range(ny - 1):
+        for ix in range(nx - 1):
+            try:
+                face = bm.faces.new((grid[iy][ix], grid[iy][ix + 1],
+                                     grid[iy + 1][ix + 1], grid[iy + 1][ix]))
+            except ValueError:
+                continue
+            for loop in face.loops:
+                loop[uv_layer].uv = (loop.vert.co.x * scale,
+                                     loop.vert.co.y * scale)
+            faces += 1
 
     bm.normal_update()
     bm.to_mesh(mesh)
@@ -690,7 +819,7 @@ def build_sea(extent, distant, sea_level_m):
 
     obj = bpy.data.objects.new("TrackSea", mesh)
     bpy.context.scene.collection.objects.link(obj)
-    return obj, 1
+    return obj, faces
 
 
 def build_pit(points, lane):
@@ -779,7 +908,7 @@ def build_pit(points, lane):
     return obj, faces
 
 
-def check_road_not_buried(points, field):
+def check_road_not_buried(points, field, half_width_m=0.0):
     """**路面が地面に埋まっていないか**を、作った側とは別の道で確かめる。
 
     これまでの検査は「地面を作るのに使った値」と地面を比べていたので、
@@ -795,13 +924,30 @@ def check_road_not_buried(points, field):
     worst = -1e30
     worst_s = 0.0
     buried = 0
+
+    # **中心線だけ見ても足りない。**
+    #
+    # 高架で実際に起きたのは「中心線は正しいが路面端で地面が
+    # 0.6 m 下がっている」だった。車は幅 1.775 m あり、走行線は
+    # 中心線から離れる。**路面の幅ぶんを見る。**
+    offsets = [0.0]
+    if half_width_m > 0.0:
+        offsets = [-half_width_m, -half_width_m * 0.5, 0.0,
+                   half_width_m * 0.5, half_width_m]
+
     for p in points:
-        gap = lookup(p["x_m"], p["y_m"]) - p.get("z_m", 0.0)
-        if gap > worst:
-            worst = gap
-            worst_s = p["s_m"]
-        if gap > 0.0:
-            buried += 1
+        heading = p["heading_rad"]
+        nx = -math.sin(heading)
+        ny = math.cos(heading)
+        for offset in offsets:
+            x = p["x_m"] + nx * offset
+            y = p["y_m"] + ny * offset
+            gap = lookup(x, y) - p.get("z_m", 0.0)
+            if gap > worst:
+                worst = gap
+                worst_s = p["s_m"]
+            if gap > 0.0:
+                buried += 1
     return worst, worst_s, buried
 
 
@@ -1185,6 +1331,13 @@ PROP_PLAN = [
     ("traffic_cone",                    1.8,  7.0, (1.0, 1.0), "corner_exit"),
 ]
 
+#: 桁の上の物を路面端から何 m まで近づけてよいか [m]。
+#:
+#: **照明も標識も防護柵も、路面のすぐ脇に立つ。** 路肩の外に置く物と
+#: 同じ基準（中心線から half + 2.5 m）を当てると、幅 9.5 m の道では
+#: 1 個も置けない。
+DECK_PROP_CLEARANCE_M = 0.6
+
 #: パイロンを路面端から何 m まで近づけてよいか [m]。
 #:
 #: 一般のプロップは中心線から `half + 2.5` m 以内を禁止しているが、
@@ -1213,6 +1366,13 @@ def plan_props(points, width_m, species_list, height_at=None,
     # 共通の PROP_PLAN しか無かったころ、4コースとも同じバリアが
     # 同じ距離に並んでいた。
     plan = PROP_PLAN if plan is None else plan
+
+    # **捨てた数を数える。**
+    #
+    # 以前はここで黙って `continue` していた。「置いた」と書いた物が
+    # 1 個も置かれていないことに、画面を数えるまで気づけなかった
+    # （憲法ルール6）。
+    dropped = {}
 
     # パイロンを置くコーナー後半の点。**縁石と同じ判定を使う**
     # （`Tracks/kerb.py`）。別の閾値にすると「縁石があるのにパイロンが
@@ -1269,6 +1429,11 @@ def plan_props(points, width_m, species_list, height_at=None,
                     # タイヤは2段に積む。**1個だけだとゴミに見える。**
                     stacks = [(distance, 0.0), (distance + 0.62, 0.0),
                               (distance + 0.31, 0.30)]
+                elif mode == "deck":
+                    # **路面端からの距離**で書く。コース幅はコースごとに
+                    # 違うので、中心線基準だと狭い道では路面に乗る。
+                    # 高さは路面の高さ（桁の上）。
+                    stacks = [(half + distance, 0.0)]
                 elif mode == "corner_exit":
                     # **路面端からの距離**（PROP_PLAN の注記）。
                     # 高さは地面に合わせる。樹木は z=0 に置いてあるが、
@@ -1282,15 +1447,32 @@ def plan_props(points, width_m, species_list, height_at=None,
                     x = p["x_m"] + nx * lateral * side
                     y = p["y_m"] + ny * lateral * side
 
+                    # **どれだけ離すかは置き方で違う。**
+                    #
+                    # 既定の「中心線から half + 2.5 m」は、路肩の外に置く
+                    # 物のための値である。これを桁の上の物（照明・標識・
+                    # 防護柵）にも当てていたため、**5 種類すべてが 1 個も
+                    # 置かれなかった**（幅 9.5 m の路面で 7.25 m 未満は
+                    # 全部却下）。しかも黙って捨てていた。
+                    #
+                    # 桁の上の物は路面のすぐ脇に立つのが正しいので、
+                    # 「路面に掛かっていないか」だけを見る。
                     if mode == "corner_exit":
-                        if (distance_to_centreline(x, y, fine_samples)
-                                < half + CONE_MIN_CLEARANCE_M):
-                            continue
-                    elif distance_to_centreline(x, y, samples) < half + 2.5:
+                        clearance = half + CONE_MIN_CLEARANCE_M
+                        probe = fine_samples
+                    elif mode == "deck":
+                        clearance = half + DECK_PROP_CLEARANCE_M
+                        probe = fine_samples
+                    else:
+                        clearance = half + 2.5
+                        probe = samples
+
+                    if distance_to_centreline(x, y, probe) < clearance:
+                        dropped[kind] = dropped.get(kind, 0) + 1
                         continue
 
                     # 向き。バリアとフェンスはコースに沿わせる。
-                    if mode in ("outside", "tyre_wall") or kind.startswith("modular_chainlink"):
+                    if mode in ("outside", "tyre_wall", "deck") or kind.startswith("modular_chainlink"):
                         yaw = heading
                     else:
                         yaw = rng.uniform(0.0, 2.0 * math.pi)
@@ -1302,10 +1484,21 @@ def plan_props(points, width_m, species_list, height_at=None,
                         "y_m": y,
                         # **地面に乗せる。** height は路面からの持ち上げ量
                         # （タイヤバリアの段など）で、地面の標高とは別。
-                        "z_m": (height_at(x, y) if height_at else 0.0) + height,
+                        #
+                        # **桁の上の物だけは路面の高さに乗せる。**
+                        # 地面（高さ場）を引くと、高架では桁の縁の傾きを
+                        # 拾って標識が斜めに沈む。
+                        "z_m": (p.get("z_m", 0.0) if mode == "deck"
+                                else (height_at(x, y) if height_at else 0.0))
+                               + height,
                         "yaw_rad": yaw,
                         "scale": rng.uniform(low, high),
                     })
+
+    if dropped:
+        # **黙って減らさない。** 何をいくつ捨てたかを必ず出す。
+        for kind, count in sorted(dropped.items()):
+            log("   !! %-40s %d 個を捨てた（路面に近すぎる）", kind, count)
     return placements
 
 
@@ -1460,13 +1653,34 @@ def main():
     #
     # これを入れる前は、勾配 10% の区間で **1107 点中 419 点** が
     # 埋まっていた（最大 0.248 m）。車は草の上を走っていた。
-    buried_m, buried_s, buried_count = check_road_not_buried(points, heightfield)
+    buried_m, buried_s, buried_count = check_road_not_buried(
+        points, heightfield, width_m / 2.0)
     if buried_m > -0.01:
         log("!! 路面が地面に埋まっている: 最大 %+.3f m（s=%.0f m）/ %d 点",
             buried_m, buried_s, buried_count)
         return 1
-    log("路面の露出 OK (地面は路面より最大 %.3f m 下、%d 点すべて)",
-        -buried_m, len(points))
+
+    # **落ち込みも見る。** 埋まっていなくても、地面が路面より大きく
+    # 下がっていると車輪が落ちる。高架で 0.6 m 落ちて車が動けなくなった。
+    lookup = make_height_lookup(heightfield)
+    deepest = 0.0
+    deepest_s = 0.0
+    for p in points:
+        heading = p["heading_rad"]
+        nx, ny = -math.sin(heading), math.cos(heading)
+        for offset in (-width_m / 2.0, 0.0, width_m / 2.0):
+            gap = p.get("z_m", 0.0) - lookup(p["x_m"] + nx * offset,
+                                             p["y_m"] + ny * offset)
+            if gap > deepest:
+                deepest = gap
+                deepest_s = p["s_m"]
+    if deepest > 0.30:
+        log("!! 路面の下の地面が落ちている: 最大 %.3f m（s=%.0f m）。"
+            "車輪が路面から落ちる", deepest, deepest_s)
+        return 1
+
+    log("路面の露出 OK (地面は路面の %.3f 〜 %.3f m 下、幅いっぱいで確認)",
+        -buried_m, deepest)
     log("地面の追従 OK (%s / %d セル、max ずれ %.2e m、標高 %.1f 〜 %.1f m)",
         "高架（桁の上）" if ground_checks["is_viaduct"] else "地続き",
         ground_checks["checked_cells"], ground_checks["follow_error_m"],
@@ -1505,8 +1719,12 @@ def main():
 
     if env.sea_level_m is not None:
         sea, sea_faces = build_sea(extent, env.distant, env.sea_level_m)
+        if sea_faces == 0:
+            log("!! 水面が 1 面も出来なかった")
+            return 1
         extras.append(sea)
-        log("sea: 水面 %.1f m", env.sea_level_m)
+        log("sea: 水面 %.1f m（%d 面 / %.0f m ごとに分割）",
+            env.sea_level_m, sea_faces, SEA_TILE_M)
 
     # **ピット。** 直線が短いコースには作らない（幅 9 m の峠に
     # ピットレーンがあったらおかしい）。
@@ -1554,7 +1772,10 @@ def main():
                 # アセットは 0.14 x 0.50 x 0.14（メートル単位ではない）。
                 # 太さは倍率で、高さは「桁までの距離 ÷ 実測の高さ」。
                 "scale": env.pier_asset_width_scale,
-                "scale_z": max((p.get("z_m", 0.0) - ground_level)
+                # **桁の下面まで。** 路面までではない。
+                # 路面まで伸ばすと橋脚が床版を突き抜ける。
+                "scale_z": max((p.get("z_m", 0.0) - ground_level
+                                - GIRDER_SLAB_M - GIRDER_DEPTH_M)
                                / max(env.pier_asset_height_m, 1e-6), 1.0),
             })
         log("pier: %d 本（%s）", len(piers), env.pier_asset)
@@ -1564,12 +1785,16 @@ def main():
             points, width_m,
             elevation.get("ground_level_m", 0.0) if elevation else 0.0,
             piers=env.viaduct_piers and not use_pier_mesh,
-            wall=env.noise_wall)
+            wall=env.noise_wall,
+            girder=env.viaduct_piers)
         if viaduct_faces == 0:
             log("!! 高架の橋脚・遮音壁が 1 面も出来なかった")
             return 1
         extras.append(viaduct)
-        log("viaduct: %d 面（橋脚 %s / 遮音壁 %s）", viaduct_faces,
+        log("viaduct: %d 面（床版 %.1f m 幅 / 桁高 %.1f m / 橋脚 %s / 遮音壁 %s）",
+            viaduct_faces,
+            width_m + 2.0 * GIRDER_OVERHANG_M,
+            GIRDER_SLAB_M + GIRDER_DEPTH_M,
             "アセット" if use_pier_mesh else
             ("手続き" if env.viaduct_piers else "なし"),
             "あり" if env.noise_wall else "なし")
@@ -1644,6 +1869,7 @@ def main():
             "fog_height_falloff": env.lighting.fog_height_falloff,
             "fog_colour": list(env.lighting.fog_colour),
             "sky_light_intensity": env.lighting.sky_light_intensity,
+            "use_lumen_gi": env.use_lumen_gi,
         },
         "kerb_spans": len(kerb_spans_used),
         "species": species,

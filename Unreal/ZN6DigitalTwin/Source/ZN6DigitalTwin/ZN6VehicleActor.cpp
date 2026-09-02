@@ -690,6 +690,14 @@ ZN6::FHudSnapshot AZN6VehicleActor::MakeHudSnapshot() const
 	Snapshot.SpeedKmh = PhysicsState.SpeedMps() * ZN6::KmhPerMps;
 	Snapshot.EngineRpm = ZN6::RadsToRpm(PhysicsState.EngineOmegaRads);
 	Snapshot.Gear = DisplayGear();
+
+	// **レッドゾーンの境界は vehicle.json から来る。**
+	//
+	// HUD が自分で 7400 を持っていた（構造体の既定値）。車両データを
+	// 変えても赤帯が動かない状態で、**表示が実データから切れていた**。
+	// エンジンが読んだ値をそのまま渡す（憲法ルール1・4）。
+	Snapshot.RedlineRpm = Vehicle.GetEngine().GetRedlineRpm();
+	Snapshot.IdleRpm = Vehicle.GetEngine().GetIdleRpm();
 	Snapshot.Throttle = Control.Throttle;
 	Snapshot.Brake = Control.Brake;
 	Snapshot.ClutchEngagement = Control.Clutch;
