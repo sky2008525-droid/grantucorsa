@@ -386,12 +386,24 @@ def build_track_materials():
             texture("asphalt_pit_lane_nor_gl"),
             texture("asphalt_pit_lane_rough"),
             overlay_diff, overlay_mask, overlay_rough)
-    ground = make_surface_material(
-        "M_TrackGround",
-        texture("aerial_grass_rock_diff"),
-        texture("aerial_grass_rock_nor_gl"),
-        texture("aerial_grass_rock_rough"),
-        uv_scale=1.0)
+    # **地面のテクスチャはコースごと**（`Tracks/environment.py`）。
+    # 指定が無い／取り込まれていない場合は既定に落ちる。黙って
+    # 落ちると気づけないので、そのときは警告する。
+    def surface(name, fallback="aerial_grass_rock"):
+        if texture("%s_diff" % name) is None:
+            if name != fallback:
+                unreal.log_warning(
+                    "[ZN6 level] テクスチャ %s が無いので %s を使う"
+                    % (name, fallback))
+            name = fallback
+        return (texture("%s_diff" % name), texture("%s_nor_gl" % name),
+                texture("%s_rough" % name))
+
+    names = placement_textures(repo_root())
+    ground = make_surface_material("M_TrackGround",
+                                   *surface(names.get("ground",
+                                                      "aerial_grass_rock")),
+                                   uv_scale=1.0)
 
     # 縁石。**UV は Blender 側で実寸に合わせて焼いてある**ので、
     # ここでタイリングを掛けない（uv_scale=1.0）。掛けると縞の間隔が
@@ -413,12 +425,10 @@ def build_track_materials():
     # **遠景の山を近くの地面と同じ材質にしない。** 同じにすると、
     # 2.6 km 先の尾根に手前と同じ草のテクスチャが同じ大きさで貼られ、
     # 距離が分からなくなる（遠くのものほど細かく見えるはずがない）。
-    distant = make_surface_material(
-        "M_TrackDistant",
-        texture("aerial_grass_rock_diff"),
-        texture("aerial_grass_rock_nor_gl"),
-        texture("aerial_grass_rock_rough"),
-        uv_scale=1.0)
+    distant = make_surface_material("M_TrackDistant",
+                                    *surface(names.get("distant",
+                                                       "aerial_grass_rock")),
+                                    uv_scale=1.0)
 
     # ガードレールと高架の構造物。**手続きで作った面**なので UV は粗い。
     # コンクリート／金属らしい無地で塗る。
@@ -589,7 +599,27 @@ def place_props(root):
     return count
 
 
-def place_lighting():
+def placement_textures(root):
+    """`placement.json` からテクスチャ名を読む。**無ければ空。**"""
+    path = os.path.join(root, "Tracks", "Export", TRACK_KEY, "placement.json")
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    return {"ground": data.get("ground_texture"),
+            "distant": data.get("distant_texture")}
+
+
+def placement_lighting(root):
+    """`placement.json` から空と光の設定を読む。**無ければ既定。**"""
+    path = os.path.join(root, "Tracks", "Export", TRACK_KEY, "placement.json")
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle).get("lighting", {})
+
+
+def place_lighting(settings=None):
     """空と光。
 
     HDRIBackdrop を使う。**SkyLight だけでは背景が描かれない**（環境光には
@@ -598,12 +628,20 @@ def place_lighting():
     """
     # **太陽を高くする。** 低いと車体の影側が真っ黒になり、
     # そこにある車輪が見えない（実際に「タイヤが見えない」と指摘された）。
+    # **コースごとに空気感を変える**（`Tracks/environment.py` の Lighting）。
+    # 空は手続き生成（SkyAtmosphere）なので、HDRI を増やさなくても
+    # 朝夕・霞・晴天を作り分けられる。
+    settings = settings or {}
+    sun_pitch = settings.get("sun_pitch_deg", -58.0)
+    sun_yaw = settings.get("sun_yaw_deg", 35.0)
+
     sun = spawn_class(unreal.DirectionalLight, unreal.Vector(0.0, 0.0, 5000.0),
-                      unreal.Rotator(0.0, -58.0, 35.0), "Sun")
+                      unreal.Rotator(0.0, sun_pitch, sun_yaw), "Sun")
     if sun is not None:
         # **SkyAtmosphere の太陽として使う。** これを立てないと空が
         # 昼にならない（太陽の位置が空の色を決めている）。
-        sun.light_component.set_intensity(10.0)
+        sun.light_component.set_intensity(
+            settings.get("sun_intensity", 10.0))
         sun.light_component.set_editor_property("atmosphere_sun_light", True)
 
     # **霧は薄くする。** 既定の密度 0.02 のままだと、コース規模
@@ -612,8 +650,18 @@ def place_lighting():
     fog = spawn_class(unreal.ExponentialHeightFog, unreal.Vector(0.0, 0.0, 0.0),
                       unreal.Rotator(0.0, 0.0, 0.0), "HeightFog")
     if fog is not None:
-        fog.component.set_editor_property("fog_density", 0.0008)
-        fog.component.set_editor_property("fog_height_falloff", 0.05)
+        # **霧が遠景の距離感を作る。**
+        # 濃さを 0 にすると、2.6 km 先の尾根が手前の斜面と同じ濃さで
+        # 描かれ、遠くにあるように見えない（空気遠近）。
+        fog.component.set_editor_property(
+            "fog_density", settings.get("fog_density", 0.0008))
+        fog.component.set_editor_property(
+            "fog_height_falloff", settings.get("fog_height_falloff", 0.05))
+        colour = settings.get("fog_colour")
+        if colour:
+            fog.component.set_editor_property(
+                "fog_inscattering_luminance",
+                unreal.LinearColor(colour[0], colour[1], colour[2], 1.0))
 
     # **空は SkyAtmosphere（手続き）で描く。**
     #
@@ -750,7 +798,7 @@ def main():
                 distant_material, structure_material, sea_material)
     place_trees(root)
     place_props(root)
-    place_lighting()
+    place_lighting(placement_lighting(root))
     place_vehicle(root)
 
     # **保存できたかを必ず確かめる。**

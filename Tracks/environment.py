@@ -101,6 +101,36 @@ class DistantTerrain:
 
 
 @dataclass
+class Lighting:
+    """空と光。**空は手続き生成（SkyAtmosphere）なのでアセットが要らない。**
+
+    ここがコースの印象をいちばん安く変える。特に**霧**が重要で、
+    「山っぽく見せるには遠くの景色が大事」の後半は空気遠近のことである。
+    霧が無いと、2.6 km 先の尾根が手前の斜面と同じ濃さで描かれ、
+    **遠くにあるように見えない。**
+
+    値はすべて演出値（憲法ルール18）。実在の気象を再現していない。
+    """
+
+    #: 太陽の高さ [deg]。負が上から。**低いほど影が長く、朝夕に見える。**
+    sun_pitch_deg: float = -58.0
+    sun_yaw_deg: float = 35.0
+    sun_intensity: float = 10.0
+
+    #: 霧の濃さ。**遠景の距離感はここで決まる。**
+    fog_density: float = 0.0008
+
+    #: 霧の高さ減衰。小さいほど高いところまで霧が残る。
+    fog_height_falloff: float = 0.05
+
+    #: 霧の色 (r, g, b)。青みが強いほど遠くが霞んで見える。
+    fog_colour: Tuple[float, float, float] = (0.45, 0.55, 0.70)
+
+    #: 環境光の強さ。
+    sky_light_intensity: float = 1.6
+
+
+@dataclass
 class Environment:
     """1コースぶんの環境。"""
 
@@ -126,6 +156,20 @@ class Environment:
 
     #: 遮音壁を立てるか（高架）。
     noise_wall: bool = False
+
+    #: 空と光。
+    lighting: "Lighting" = field(default_factory=lambda: Lighting())
+
+    #: 地面のテクスチャ（`Tracks/Assets/*/manifest.json` の名前）。
+    #:
+    #: **今は 1 種類しか無い。** `aerial_grass_rock` は乾いた黄色の
+    #: 草地で、峠の林床にも街の路面にも合わない。森の地面・土・
+    #: コンクリートが手に入ったらここを差し替える。
+    #: 無いテクスチャを指した場合は既定に落ちる（UE 側で警告）。
+    ground_texture: str = "aerial_grass_rock"
+
+    #: 遠景のテクスチャ。近景と分けられるようにしておく。
+    distant_texture: str = "aerial_grass_rock"
 
     #: 海面の標高 [m]。`None` なら海を作らない。
     #:
@@ -228,6 +272,10 @@ ENVIRONMENTS: Dict[str, Environment] = {
     # まだ答えられていない。**
     # -----------------------------------------------------------------
     "technical_circuit": Environment(
+        # **晴天の昼。** サーキットは見通しが命なので霧を薄くする。
+        lighting=Lighting(sun_pitch_deg=-62.0, sun_yaw_deg=20.0,
+                          fog_density=0.0006,
+                          fog_colour=(0.52, 0.60, 0.72)),
         relief_amplitude_m=9.0,
         relief_wavelength_m=180.0,
         distant=DistantTerrain(
@@ -277,6 +325,13 @@ ENVIRONMENTS: Dict[str, Environment] = {
     # 見えないので、アセットが入り次第ここへ足すこと。
     # -----------------------------------------------------------------
     "high_speed_ring": Environment(
+        # **午後遅く。** 太陽を低くすると、高架の桁が長い影を落とす。
+        # 都市の霞をやや強めに（湾岸は水面からの湿気で霞む）。
+        lighting=Lighting(sun_pitch_deg=-28.0, sun_yaw_deg=-115.0,
+                          sun_intensity=8.0,
+                          fog_density=0.0022, fog_height_falloff=0.03,
+                          fog_colour=(0.60, 0.58, 0.60),
+                          sky_light_intensity=1.5),
         # 街なので地形の起伏はほぼ無い。
         relief_amplitude_m=2.5,
         relief_wavelength_m=260.0,
@@ -343,6 +398,17 @@ ENVIRONMENTS: Dict[str, Environment] = {
     # ここでやるのは、**林の密度・種類のばらつき・遠景の山**である。
     # -----------------------------------------------------------------
     "mountain_pass": Environment(
+        # **山の空気。**
+        #
+        # 霧をはっきり効かせる。**「遠くの景色が大事」の後半はこれ。**
+        # 霧が無いと 2.6 km 先の尾根が手前の斜面と同じ濃さで描かれ、
+        # 遠くにあるように見えない。高さ減衰を小さくして、尾根の高さ
+        # まで霞が残るようにする。
+        lighting=Lighting(sun_pitch_deg=-42.0, sun_yaw_deg=70.0,
+                          sun_intensity=9.0,
+                          fog_density=0.0055, fog_height_falloff=0.012,
+                          fog_colour=(0.62, 0.70, 0.80),
+                          sky_light_intensity=1.9),
         # 近景の起伏も大きくする。**道の両脇が斜面**であってほしい。
         relief_amplitude_m=26.0,
         relief_wavelength_m=110.0,

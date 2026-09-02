@@ -167,3 +167,52 @@ def test_物理の基準コースは変えない():
     assert env.distant is None
     assert not env.guardrail
     assert not env.viaduct_piers
+
+
+# --- 空と光 -----------------------------------------------------------------
+
+
+def test_コースごとに空気感が違う():
+    """**霧が遠景の距離感を作る。**
+
+    霧が無いと、2.6 km 先の尾根が手前の斜面と同じ濃さで描かれ、
+    遠くにあるように見えない（空気遠近）。空は手続き生成なので、
+    HDRI を増やさなくてもここで作り分けられる。
+    """
+    fogs = {key: environment_for(key).lighting.fog_density
+            for key in ALL_KEYS}
+
+    assert fogs["mountain_pass"] > 3.0 * fogs["technical_circuit"], (
+        "峠とサーキットの霧が似すぎている: {}".format(fogs))
+
+    suns = {key: environment_for(key).lighting.sun_pitch_deg
+            for key in ALL_KEYS}
+    assert len(set(suns.values())) >= 3, (
+        "太陽の高さがどれも同じ: {}".format(suns))
+
+
+def test_霧の色が指定されている():
+    for key in ALL_KEYS:
+        colour = environment_for(key).lighting.fog_colour
+        assert len(colour) == 3
+        assert all(0.0 <= c <= 1.0 for c in colour), (key, colour)
+
+
+def test_海があるのは都市高速だけ():
+    """指摘「海めちゃめちゃありますよ」は首都高の話。峠に海は無い。"""
+    assert environment_for("high_speed_ring").sea_level_m is not None
+    for key in ("mountain_pass", "technical_circuit", "physics_test_track"):
+        assert environment_for(key).sea_level_m is None, key
+
+
+def test_海面より低い遠景がある():
+    """**水面が地面に隠れないこと。**
+
+    遠景の基準面を下げないと陸しか出来ず、水面が 1 ピクセルも見えない。
+    """
+    env = environment_for("high_speed_ring")
+    assert env.distant is not None
+    base = env.distant.base_offset_m
+    assert base < env.sea_level_m, (
+        "遠景の基準面 {:.1f} m が海面 {:.1f} m より高い（海が見えない）"
+        .format(base, env.sea_level_m))

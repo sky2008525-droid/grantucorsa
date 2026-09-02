@@ -1548,6 +1548,19 @@ def main():
         "ground_fbx": "TrackGround.fbx",
         # 遠景・ガードレール・高架。**あるものだけ載る。**
         "structure_fbx": extra_files,
+        # **空と光もコースごとに違う**（`Tracks/environment.py`）。
+        # UE 側が `Tracks/` を import しなくて済むよう、ここで値を渡す。
+        "ground_texture": env.ground_texture,
+        "distant_texture": env.distant_texture,
+        "lighting": {
+            "sun_pitch_deg": env.lighting.sun_pitch_deg,
+            "sun_yaw_deg": env.lighting.sun_yaw_deg,
+            "sun_intensity": env.lighting.sun_intensity,
+            "fog_density": env.lighting.fog_density,
+            "fog_height_falloff": env.lighting.fog_height_falloff,
+            "fog_colour": list(env.lighting.fog_colour),
+            "sky_light_intensity": env.lighting.sky_light_intensity,
+        },
         "kerb_spans": len(kerb_spans_used),
         "species": species,
         "trees": trees,
