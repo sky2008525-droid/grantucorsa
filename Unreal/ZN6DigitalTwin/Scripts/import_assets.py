@@ -11,8 +11,9 @@
 
   Vehicles/ZN6/Export/*.fbx      車体（ボディ + 4輪）
   Tracks/Export/*.fbx            路面・縁石・地面
-  Tracks/Assets/polyhaven/*      樹木（glTF）・テクスチャ・HDRI
-  Tracks/Assets/opengameart/*    PolyHaven に無かった小物（パイロン）
+  Tracks/Assets/polyhaven/*      樹木・岩・小物（glTF）・地面テクスチャ・HDRI
+  Tracks/Assets/opengameart/*    PolyHaven に無かったもの
+                                 （パイロン / 道路標識 / 信号機 / 工業ビル）
 
 **単位に注意。** Blender 側は m で書き出しており、FBX は 1 unit = 1 cm の
 UE へ入るときに 100 倍される。`import_uniform_scale` を触らないこと。
@@ -348,12 +349,20 @@ def import_asset_pack(root, pack, required=True):
         folder = os.path.join(base, asset_id)
 
         if kind == "models":
-            gltf = os.path.join(folder, record["gltf"])
-            if not os.path.isfile(gltf):
-                unreal.log_error("[ZN6 import] glTF が無い: %s" % gltf)
-                continue
-            # **glTF は Interchange 任せにする。** FbxImportUI は使えない
-            model_tasks.append(build_task(gltf, "%s/%s" % (PKG_FOLIAGE, asset_id)))
+            # **1 アセットに複数モデルがある場合がある。**
+            # OpenGameArt のキット（道路標識・信号機・工業ビル）は 1 つの
+            # zip に数十個入っていて、`Tools/fetch_opengameart.py` が
+            # `gltf_files` にその一覧を書く。1 個だけのものは従来どおり
+            # `gltf`。**両方を見る**（片方に寄せると既存が読めなくなる）。
+            names = record.get("gltf_files") or [record["gltf"]]
+            for name in names:
+                gltf = os.path.join(folder, name)
+                if not os.path.isfile(gltf):
+                    unreal.log_error("[ZN6 import] glTF が無い: %s" % gltf)
+                    continue
+                # **glTF は Interchange 任せにする。** FbxImportUI は使えない
+                model_tasks.append(
+                    build_task(gltf, "%s/%s" % (PKG_FOLIAGE, asset_id)))
 
         elif kind == "hdris":
             hdr = os.path.join(folder, record["file"])

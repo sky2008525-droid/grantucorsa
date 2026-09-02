@@ -170,10 +170,8 @@ void AZN6VehicleActor::BeginPlay()
 		return;
 	}
 
-	// vehicle.json はリポジトリ側にある（<repo>/Vehicles/ZN6/vehicle.json）。
-	// プロジェクトは <repo>/Unreal/ZN6DigitalTwin/ に置いてある。
-	const FString RepoRoot = FPaths::ConvertRelativePathToFull(
-		FPaths::ProjectDir() / TEXT("../.."));
+	// **エディタと exe でデータの場所が違う**（DataRoot の注記）。
+	const FString RepoRoot = DataRoot();
 
 	FString Error;
 	LoadedVehiclePath = RepoRoot / TEXT("Vehicles/ZN6/vehicle.json");
@@ -1801,6 +1799,26 @@ void AZN6VehicleActor::ClearGhost()
 	{
 		GhostMesh->SetVisibility(false);
 	}
+}
+
+FString AZN6VehicleActor::DataRoot()
+{
+	// **同梱した側を先に探す。**
+	//
+	// パッケージでは `ZN6Data` をプロジェクト直下へ staging する
+	// （`Tools/package_game.sh` と `Config/DefaultGame.ini`）。
+	// そこに vehicle.json があれば exe として動いている。
+	const FString Staged = FPaths::ConvertRelativePathToFull(
+		FPaths::ProjectDir() / TEXT("ZN6Data"));
+	if (FPaths::FileExists(Staged / TEXT("Vehicles/ZN6/vehicle.json")))
+	{
+		return Staged;
+	}
+
+	// エディタから動かしているとき。プロジェクトは
+	// `<repo>/Unreal/ZN6DigitalTwin/` にあるので 2 つ上がリポジトリ。
+	return FPaths::ConvertRelativePathToFull(
+		FPaths::ProjectDir() / TEXT("../.."));
 }
 
 void AZN6VehicleActor::PrepareGhostMesh()

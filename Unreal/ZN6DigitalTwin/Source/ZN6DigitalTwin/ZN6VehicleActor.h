@@ -677,6 +677,23 @@ private:
 	/** ゴーストの車体に、自車と同じメッシュと半透明マテリアルを入れる。 */
 	void PrepareGhostMesh();
 
+public:
+	/**
+	 * 実データ（vehicle.json / コース / 音）の置き場所。
+	 *
+	 * **エディタと exe で場所が違う。**
+	 *
+	 *   エディタ: `<repo>/`（プロジェクトは `<repo>/Unreal/ZN6DigitalTwin/`）
+	 *   exe     : `<パッケージ>/ZN6DigitalTwin/ZN6Data/`
+	 *
+	 * `ProjectDir()/../..` だけを見ていたときは、**exe にすると
+	 * パッケージの外を指して何も読めなかった**（車が動かない）。
+	 * 同梱した側を先に探し、無ければリポジトリを見る。
+	 */
+	static FString DataRoot();
+
+private:
+
 	/** 起動オプション（`-ZN6Record` / `-ZN6Replay=` / `-ZN6Ghost=`）を見る。 */
 	void SetUpReplayFromCommandLine();
 
