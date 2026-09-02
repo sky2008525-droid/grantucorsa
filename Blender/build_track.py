@@ -33,6 +33,14 @@ import bpy
 import bmesh
 from mathutils import Vector, noise
 
+# **縁石の敷き方は `Tracks/kerb.py` が決める。** 定数を 3 箇所（ここ・
+# road_texture.py・テスト）に書き分けると、片方だけ直したときに黙って
+# ずれる。`Tracks/` を import できるようにする。
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "Tracks"))
+from kerb import (KERB_HEIGHT_M, KERB_RISE_M, KERB_TILE_LENGTH_M,  # noqa: E402
+                  KERB_WIDTH_M, corner_exit_indices, kerb_spans)
+
 # 路面の外側に付ける起伏の大きさ [m] と横方向の波長 [m]。
 # **控えめにする。** 平坦な走行面から急に山が立ち上がると不自然。
 RELIEF_AMPLITUDE_M = 7.0
@@ -206,6 +214,107 @@ def build_road(points, width_m):
     return obj
 
 
+#: 縁石の断面。**(路面端からの横位置 [m], 高さ [m])** を外側へ並べたもの。
+#:
+#:      z
+#:      ^      2______3 の上
+#:      |     /|
+#:   0__|__1/  |          0 : 路面端（z = 0。路面の上面と揃える）
+#:   ===路面=  |          1 : 立ち上がりの頂点
+#:            |3          2 : 上面の外端
+#:                        3 : 外側の垂直面の下端（地面に隠れる）
+#:
+#: **上面を水平にする。** 実際の縁石は外へ向かって少し下がるものもあるが、
+#: ここで傾けると `KERB_HEIGHT_M` が「どこの高さか」曖昧になる。
+KERB_PROFILE = (
+    (0.0,           0.0),
+    (KERB_RISE_M,   KERB_HEIGHT_M),
+    (KERB_WIDTH_M,  KERB_HEIGHT_M),
+    (KERB_WIDTH_M, -ROAD_THICKNESS_M),
+)
+
+
+def build_kerbs(points, width_m, spacing_m):
+    """コーナーの路面端に縁石を作る。**直線には作らない。**
+
+    どの区間に敷くかは `Tracks/kerb.py` の `kerb_spans()` が決める
+    （しきい値と、その値を採った理由もそこにある）。
+
+    UV は **U が縁石を横切る向き 0..1、V が区間の先頭からの距離**を
+    `KERB_TILE_LENGTH_M` で割ったもの。
+
+    **V を通し距離 `s_m` から作らないこと。** 周回の閉合をまたぐ区間では
+    s が全長から 0 へ飛ぶので、そこで縞が切れる。区間の先頭から測り直せば
+    切れ目が出ないうえ、**どの縁石も赤で始まる**（実際の縁石もそう見える）。
+    """
+    half = width_m / 2.0
+    spans = kerb_spans([p["curvature_1pm"] for p in points], spacing_m)
+
+    mesh = bpy.data.meshes.new("TrackKerb")
+    bm = bmesh.new()
+    uv_layer = bm.loops.layers.uv.new("UVMap")
+
+    # 断面の各点に割り当てる U。**外側の垂直面は上面の外端と同じ列を使う。**
+    # 別の列にすると、角で色が変わって縞が途切れて見える。
+    us = [min(lateral / KERB_WIDTH_M, 1.0) for lateral, _ in KERB_PROFILE]
+
+    faces = 0
+    for span in spans:
+        for side in (+1.0, -1.0):
+            rows = []
+            travelled = 0.0
+            previous = None
+            for index in span:
+                p = points[index]
+                if previous is not None:
+                    travelled += math.hypot(p["x_m"] - previous["x_m"],
+                                            p["y_m"] - previous["y_m"])
+                previous = p
+                heading = p["heading_rad"]
+                # 左手側の法線（物理の座標系で Y が左）に side を掛ける
+                nx = -math.sin(heading) * side
+                ny = math.cos(heading) * side
+                column = [bm.verts.new((p["x_m"] + nx * (half + lateral),
+                                        p["y_m"] + ny * (half + lateral), z))
+                          for lateral, z in KERB_PROFILE]
+                rows.append((column, travelled))
+
+            for row_index in range(len(rows) - 1):
+                column_a, s_a = rows[row_index]
+                column_b, s_b = rows[row_index + 1]
+                v_a = s_a / KERB_TILE_LENGTH_M
+                v_b = s_b / KERB_TILE_LENGTH_M
+
+                for j in range(len(KERB_PROFILE) - 1):
+                    # **巻き方で法線が決まる。** 進行方向 t と外向き法線 n は
+                    # t × n = +z（左側）なので、この順で回すと上面・外面とも
+                    # 外を向く。右側は n が反転するため、順を逆にする。
+                    quad = (column_a[j], column_b[j],
+                            column_b[j + 1], column_a[j + 1])
+                    uvs = {column_a[j]: (us[j], v_a),
+                           column_b[j]: (us[j], v_b),
+                           column_b[j + 1]: (us[j + 1], v_b),
+                           column_a[j + 1]: (us[j + 1], v_a)}
+                    if side < 0.0:
+                        quad = tuple(reversed(quad))
+                    try:
+                        face = bm.faces.new(quad)
+                    except ValueError:
+                        continue          # 同一面の重複（極端に詰まった点）
+                    for loop in face.loops:
+                        loop[uv_layer].uv = uvs[loop.vert]
+                    faces += 1
+
+    bm.verts.ensure_lookup_table()
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+
+    obj = bpy.data.objects.new("TrackKerb", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj, spans, faces
+
+
 def centreline_sampler(points, stride):
     """距離計算用に間引いた中心線。**全点使うと地面生成が現実的な時間で終わらない。**"""
     return [(p["x_m"], p["y_m"]) for p in points[::stride]]
@@ -376,12 +485,17 @@ def plan_trees(points, width_m, offsets, species_list):
 #: (種類, 中心線からの距離 [m], 間隔 [m], 尺度の範囲, 置き方)
 #:
 #: 置き方:
-#:   "both"    左右どちらにも
-#:   "outside" **コーナーの外側だけ。** バリアやタイヤバリアはここ
+#:   "both"        左右どちらにも
+#:   "outside"     **コーナーの外側だけ。** バリアやタイヤバリアはここ
 #:   "left" / "right"
+#:   "corner_exit" **コーナーの立ち上がり、外側の路肩だけ。** パイロン
 #:
 #: **距離は路肩より外にする。** 物理の当たり判定は樹木と世界境界しか
 #: 持たないので、路面のすぐ脇に置くとすり抜ける絵が出る。
+#:
+#: **"corner_exit" だけ距離の基準が違う。** 中心線からではなく
+#: **路面端から**の距離で書く。コース幅は 9〜14 m とばらつくので、
+#: 中心線基準だと狭いコースでは遠すぎ、広いコースでは路面に乗る。
 PROP_PLAN = [
     # 種類, 距離, 間隔, 尺度, 置き方
     ("concrete_road_barrier",          11.0,  4.2, (1.0, 1.0), "outside"),
@@ -397,7 +511,17 @@ PROP_PLAN = [
     ("plastic_crate_02",               15.0,110.0, (1.0, 1.0), "left"),
     ("boulder_01",                     44.0, 55.0, (0.6, 1.3), "both"),
     ("rock_07",                        38.0, 33.0, (0.5, 1.1), "both"),
+    # **パイロン。** 距離は路面端から（上の注記）。縁石の外端が 1.0 m
+    # なので、その 0.8 m 外に置く。**走行ラインにも縁石にも掛からない。**
+    ("traffic_cone",                    1.8,  7.0, (1.0, 1.0), "corner_exit"),
 ]
+
+#: パイロンを路面端から何 m まで近づけてよいか [m]。
+#:
+#: 一般のプロップは中心線から `half + 2.5` m 以内を禁止しているが、
+#: パイロンは**路肩に置くもの**なのでそれでは置けない。代わりに
+#: 「別区間の路面に乗っていないか」だけを見る。
+CONE_MIN_CLEARANCE_M = 1.0
 
 #: タイヤバリアを置く曲率のしきい値 [1/m]。これより曲がっている所だけ。
 #: **直線に積んでも意味がない。** 飛び出すのはコーナーの外側。
@@ -415,6 +539,19 @@ def plan_props(points, width_m, species_list):
     samples = centreline_sampler(points, 5)
     spacing = points[1]["s_m"] - points[0]["s_m"]
     half = width_m / 2.0
+
+    # パイロンを置くコーナー後半の点。**縁石と同じ判定を使う**
+    # （`Tracks/kerb.py`）。別の閾値にすると「縁石があるのにパイロンが
+    # 無いコーナー」が出て、理由が説明できなくなる。
+    exit_indices = corner_exit_indices([p["curvature_1pm"] for p in points])
+
+    # **パイロン用は間引かない標本を使う。**
+    #
+    # `centreline_sampler(points, 5)` は 5 点ごとなので、点と点の間に
+    # 落ちた場所では距離が最大 2.5 m 過大に出る。一般のプロップは
+    # 余裕が 2.5 m あるので影響しないが、パイロンは路面端から 1.8 m に
+    # 置くため、過大評価がそのまま「別区間の路面に乗る」事故になる。
+    fine_samples = centreline_sampler(points, 1)
 
     placements = []
     for kind, offset_m, gap_m, scale_range, mode in PROP_PLAN:
@@ -440,6 +577,11 @@ def plan_props(points, width_m, species_list):
                 if abs(curvature) < TYRE_WALL_CURVATURE:
                     continue
                 sides = [-1.0 if curvature > 0.0 else 1.0]
+            elif mode == "corner_exit":
+                # 立ち上がりだけ。曲率が正（左旋回）なら外側は右。
+                if index not in exit_indices:
+                    continue
+                sides = [-1.0 if curvature > 0.0 else 1.0]
             elif mode == "left":
                 sides = [1.0]
             elif mode == "right":
@@ -453,6 +595,12 @@ def plan_props(points, width_m, species_list):
                     # タイヤは2段に積む。**1個だけだとゴミに見える。**
                     stacks = [(distance, 0.0), (distance + 0.62, 0.0),
                               (distance + 0.31, 0.30)]
+                elif mode == "corner_exit":
+                    # **路面端からの距離**（PROP_PLAN の注記）。
+                    # 高さは地面に合わせる。樹木は z=0 に置いてあるが、
+                    # 地面は GROUND_SINK_M だけ沈めてあるので、高さ 0.7 m の
+                    # パイロンだと 5 cm 浮いているのがはっきり見える。
+                    stacks = [(half + distance, -GROUND_SINK_M)]
                 else:
                     stacks = [(distance, 0.0)]
 
@@ -460,7 +608,11 @@ def plan_props(points, width_m, species_list):
                     x = p["x_m"] + nx * lateral * side
                     y = p["y_m"] + ny * lateral * side
 
-                    if distance_to_centreline(x, y, samples) < half + 2.5:
+                    if mode == "corner_exit":
+                        if (distance_to_centreline(x, y, fine_samples)
+                                < half + CONE_MIN_CLEARANCE_M):
+                            continue
+                    elif distance_to_centreline(x, y, samples) < half + 2.5:
                         continue
 
                     # 向き。バリアとフェンスはコースに沿わせる。
@@ -521,6 +673,16 @@ def main():
     road = build_road(points, width_m)
     log("road: %d 面", len(road.data.polygons))
 
+    # **縁石はコーナーだけ。** 路面と別のメッシュにする（マテリアルが
+    # 違う。赤白の縞と白線を 1 枚のテクスチャに混ぜられない）。
+    spacing_m = points[1]["s_m"] - points[0]["s_m"]
+    kerb, kerb_spans_used, kerb_faces = build_kerbs(points, width_m, spacing_m)
+    if kerb_faces == 0:
+        # **黙って縁石無しで通さない**（憲法ルール6）。
+        log("!! 縁石が 1 面も出来なかった（コーナーが検出されていない）")
+        return 1
+    log("kerb: %d 区間 / %d 面", len(kerb_spans_used), kerb_faces)
+
     ground, extent, heightfield = build_ground(points, width_m, shoulder_m)
     log("ground: %d 面 (%.1fs)", len(ground.data.polygons), time.time() - started)
 
@@ -548,6 +710,18 @@ def main():
         return 1
     log("路面の平坦性 OK (上面 %d 頂点 max |z| = %.2e / 下面 %d 頂点、厚み %.3f m)",
         top, worst_top, bottom, ROAD_THICKNESS_M)
+
+    # 縁石の高さが断面どおりかを確認する。**目視ではなく数値で。**
+    #
+    # 断面は 4 点しか無いので、頂点の z はその 4 値のいずれかにしかならない。
+    # **それ以外が出たら、断面か座標変換が壊れている。**
+    allowed_z = sorted({z for _, z in KERB_PROFILE})
+    for vert in kerb.data.vertices:
+        if not any(abs(vert.co.z - z) < 1e-9 for z in allowed_z):
+            log("!! 縁石に断面外の頂点がある (z = %.6f)", vert.co.z)
+            return 1
+    log("縁石の断面 OK (%d 頂点、高さ %.3f m / 幅 %.2f m)",
+        len(kerb.data.vertices), KERB_HEIGHT_M, KERB_WIDTH_M)
 
     # **車が到達しうる範囲の地面も平らかを確認する。**
     #
@@ -594,6 +768,7 @@ def main():
         log("   %-22s %d", name, count)
 
     export_fbx([road], os.path.join(out_dir, "TrackRoad.fbx"))
+    export_fbx([kerb], os.path.join(out_dir, "TrackKerb.fbx"))
     export_fbx([ground], os.path.join(out_dir, "TrackGround.fbx"))
 
     placement = {
@@ -606,7 +781,9 @@ def main():
         "track_name": track["name"],
         "extent_m": {"x0": extent[0], "x1": extent[1], "y0": extent[2], "y1": extent[3]},
         "road_fbx": "TrackRoad.fbx",
+        "kerb_fbx": "TrackKerb.fbx",
         "ground_fbx": "TrackGround.fbx",
+        "kerb_spans": len(kerb_spans_used),
         "species": species,
         "trees": trees,
         "prop_kinds": sorted({prop["kind"] for prop in props}),

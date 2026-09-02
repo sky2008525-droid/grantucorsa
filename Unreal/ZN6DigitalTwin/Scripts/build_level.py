@@ -349,14 +349,30 @@ def build_track_materials():
         texture("aerial_grass_rock_nor_gl"),
         texture("aerial_grass_rock_rough"),
         uv_scale=1.0)
+
+    # 縁石。**UV は Blender 側で実寸に合わせて焼いてある**ので、
+    # ここでタイリングを掛けない（uv_scale=1.0）。掛けると縞の間隔が
+    # `Tracks/kerb.py` の設計と変わる。
+    kerb_diff = texture("kerb_diff")
+    if kerb_diff is None:
+        # **黙って縁石を灰色にしない**（憲法ルール6）。
+        unreal.log_error(
+            "[ZN6 level] 縁石のテクスチャが無い。"
+            "`python Tracks/road_texture.py` と import_assets.py を先に走らせること。")
+        kerb = None
+    else:
+        kerb = make_surface_material("M_TrackKerb", kerb_diff, None,
+                                     texture("kerb_rough"), uv_scale=1.0)
     make_tyre_mark_material()
 
-    log("マテリアル: road=%s ground=%s"
-        % (road.get_name() if road else "None", ground.get_name() if ground else "None"))
-    return road, ground
+    log("マテリアル: road=%s kerb=%s ground=%s"
+        % (road.get_name() if road else "None",
+           kerb.get_name() if kerb else "None",
+           ground.get_name() if ground else "None"))
+    return road, kerb, ground
 
 
-def place_track(road_material, ground_material):
+def place_track(road_material, kerb_material, ground_material):
     """路面と地面を置く。
 
     **メッシュは既にワールド座標で作られている**（Blender が中心線から
@@ -364,6 +380,7 @@ def place_track(road_material, ground_material):
     """
     placed = []
     for mesh_name, material in (("TrackRoad", road_material),
+                                ("TrackKerb", kerb_material),
                                 ("TrackGround", ground_material)):
         mesh = find_asset("%s/%s" % (PKG_TRACK, TRACK_KEY), mesh_name,
                           unreal.StaticMesh)
@@ -641,8 +658,8 @@ def main():
         unreal.log_error("[ZN6 level] レベルを作れない: %s" % LEVEL_PATH)
         return
 
-    road_material, ground_material = build_track_materials()
-    place_track(road_material, ground_material)
+    road_material, kerb_material, ground_material = build_track_materials()
+    place_track(road_material, kerb_material, ground_material)
     place_trees(root)
     place_props(root)
     place_lighting()

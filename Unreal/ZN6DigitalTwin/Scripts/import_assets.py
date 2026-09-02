@@ -10,8 +10,9 @@
 取り込むもの:
 
   Vehicles/ZN6/Export/*.fbx      車体（ボディ + 4輪）
-  Tracks/Export/*.fbx            路面・地面
+  Tracks/Export/*.fbx            路面・縁石・地面
   Tracks/Assets/polyhaven/*      樹木（glTF）・テクスチャ・HDRI
+  Tracks/Assets/opengameart/*    PolyHaven に無かった小物（パイロン）
 
 **単位に注意。** Blender 側は m で書き出しており、FBX は 1 unit = 1 cm の
 UE へ入るときに 100 倍される。`import_uniform_scale` を触らないこと。
@@ -119,7 +120,7 @@ def configure_generated_textures():
     にじみ、ラフネスが全体に明るく出る（`configure_textures()` と同じ話）。
     """
     fixed = 0
-    for name in ("road_overlay_mask", "road_overlay_rough"):
+    for name in ("road_overlay_mask", "road_overlay_rough", "kerb_rough"):
         path = "%s/%s" % (PKG_TEXTURE, name)
         asset = unreal.EditorAssetLibrary.load_asset(path)
         if asset is None:
@@ -264,7 +265,7 @@ def import_track(root):
     for key in keys:
         folder = os.path.join(root, "Tracks", "Export", key)
         tasks = []
-        for name in ("TrackRoad.fbx", "TrackGround.fbx"):
+        for name in ("TrackRoad.fbx", "TrackKerb.fbx", "TrackGround.fbx"):
             path = os.path.join(folder, name)
             if not os.path.isfile(path):
                 unreal.log_error("[ZN6 import] %s が無い" % path)
@@ -293,7 +294,8 @@ def import_generated_textures(root):
         return []
 
     tasks = []
-    for name in ("road_overlay_diff", "road_overlay_mask", "road_overlay_rough"):
+    for name in ("road_overlay_diff", "road_overlay_mask", "road_overlay_rough",
+                 "kerb_diff", "kerb_rough"):
         path = os.path.join(folder, name + ".png")
         if os.path.isfile(path):
             tasks.append(build_task(path, PKG_TEXTURE))
@@ -304,9 +306,29 @@ def import_generated_textures(root):
     return run_tasks(tasks)
 
 
-def import_polyhaven(root):
-    base = os.path.join(root, "Tracks", "Assets", "polyhaven")
-    with open(os.path.join(base, "manifest.json"), encoding="utf-8") as handle:
+def import_asset_pack(root, pack, required=True):
+    """`Tracks/Assets/<pack>/manifest.json` に載っているものを取り込む。
+
+    **PolyHaven 以外の出所も同じ形の manifest を書く**
+    （`Tools/fetch_opengameart.py`）。取り込み側を出所ごとに分けると、
+    増えるたびにここへ分岐が増える。
+
+    @param required 無いときにエラーにするか。PolyHaven は必須、
+                    それ以外は「まだ取得していない」があり得る。
+    """
+    base = os.path.join(root, "Tracks", "Assets", pack)
+    manifest_path = os.path.join(base, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        # **黙って飛ばさない**（憲法ルール6）。
+        message = ("[ZN6 import] %s が無い。"
+                   "Tools/fetch_%s.py を先に走らせること" % (manifest_path, pack))
+        if required:
+            unreal.log_error(message)
+        else:
+            unreal.log_warning(message)
+        return []
+
+    with open(manifest_path, encoding="utf-8") as handle:
         manifest = json.load(handle)
 
     model_tasks = []
@@ -334,8 +356,8 @@ def import_polyhaven(root):
                 if os.path.isfile(path):
                     texture_tasks.append(build_task(path, PKG_TEXTURE))
 
-    log("樹木 %d 種 / テクスチャ %d 枚を取り込む"
-        % (len(model_tasks), len(texture_tasks)))
+    log("%s: モデル %d 種 / テクスチャ %d 枚を取り込む"
+        % (pack, len(model_tasks), len(texture_tasks)))
     return run_tasks(model_tasks) + run_tasks(texture_tasks)
 
 
@@ -351,7 +373,8 @@ def main():
     imported = []
     imported += import_vehicle(root)
     imported += import_track(root)
-    imported += import_polyhaven(root)
+    imported += import_asset_pack(root, "polyhaven")
+    imported += import_asset_pack(root, "opengameart")
     imported += import_generated_textures(root)
 
     configure_textures()

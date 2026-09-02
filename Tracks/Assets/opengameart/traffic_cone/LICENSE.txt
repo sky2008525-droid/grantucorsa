@@ -1,0 +1,10 @@
+Traffic cone
+Author : Savino
+License: CC0
+Source : https://opengameart.org/content/traffic-cone
+File   : https://opengameart.org/sites/default/files/high.zip
+md5    : 6aa7af159d0a931b03f84690193f0b1b
+Fetched: 2026-09-02
+
+取得と変換: Tools/fetch_opengameart.py
+変換の内容: Docs/PHASE15_DATA_LICENCE.md

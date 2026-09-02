@@ -24,9 +24,12 @@
 | `road_overlay_diff.png` | 上に載せる色。白線は白、ひび割れと補修跡は暗い |
 | `road_overlay_mask.png` | どれだけ載せるか。0 = アスファルトのまま |
 | `road_overlay_rough.png` | ラフネスの差。白線は滑らか、ひび割れは粗い |
+| `kerb_diff.png` | 縁石の赤白の縞 |
+| `kerb_rough.png` | 縁石のラフネス。塗料は滑らか、縁は粗い |
 
 マテリアル側は `lerp(アスファルト, overlay, mask)` で合成する。
 **上書きではなく混ぜる**ので、アスファルトの質感が下に残る。
+縁石は下地が無いので、そのまま貼る。
 
 ## 座標
 
@@ -43,6 +46,8 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+from kerb import KERB_STRIPES_PER_TILE, KERB_TILE_LENGTH_M
 
 OUT_DIR = Path(__file__).resolve().parent / "Export" / "Textures"
 
@@ -158,17 +163,87 @@ def build_patches(rng: np.random.Generator) -> np.ndarray:
     return field
 
 
-def build_grain(rng: np.random.Generator) -> np.ndarray:
+def build_grain(rng: np.random.Generator,
+                width_px: int = WIDTH_PX, height_px: int = HEIGHT_PX) -> np.ndarray:
     """細かいざらつき。**一様なノイズではなく、いくつかの粗さを重ねる。**"""
-    total = np.zeros((HEIGHT_PX, WIDTH_PX), dtype=np.float64)
+    total = np.zeros((height_px, width_px), dtype=np.float64)
     weight = 0.0
     for scale, amount in ((4, 1.0), (16, 0.5), (64, 0.25)):
-        small = rng.random((max(HEIGHT_PX // scale, 2), max(WIDTH_PX // scale, 2)))
+        small = rng.random((max(height_px // scale, 2), max(width_px // scale, 2)))
         image = Image.fromarray((small * 255).astype(np.uint8)).resize(
-            (WIDTH_PX, HEIGHT_PX), Image.BILINEAR)
+            (width_px, height_px), Image.BILINEAR)
         total += np.asarray(image, dtype=np.float64) / 255.0 * amount
         weight += amount
     return total / weight
+
+
+# --- 縁石 -------------------------------------------------------------------
+#
+# 白線と同じ枠組みに乗せる。**画像の x が縁石を横切る向き**（0 = 路面側、
+# 1 = 外側）、**y が進行方向**。`Blender/build_track.py` の `build_kerbs()` が
+# UV をこの向きで作る。**取り違えると縞が縦に走る**（進行方向に赤白が
+# 分かれた、道路にあり得ない絵になる）。
+
+#: 縁石テクスチャの画素数。**細かくしても情報が増えない。**
+#: 描いているのは縞と汚れだけで、写真ではない。
+KERB_WIDTH_PX = 64
+KERB_HEIGHT_PX = 512
+
+#: 赤と白。**彩度を上げすぎない。** 屋外で日に焼けた塗料は
+#: 純色ではなく、真っ赤にすると縁石だけが画面から浮く。
+KERB_RED = (0.55, 0.11, 0.10)
+KERB_WHITE = (0.84, 0.83, 0.79)
+
+
+def build_kerb(rng: np.random.Generator) -> dict:
+    """縁石の赤白の縞を描く。
+
+    縞は**進行方向に並ぶ**（1 ブロックが `KERB_TILE_LENGTH_M /
+    KERB_STRIPES_PER_TILE` メートル）。横切る向きには色を変えない。
+
+    @return {"kerb_diff": (H, W, 3), "kerb_rough": (H, W)}
+    """
+    u = ((np.arange(KERB_WIDTH_PX) + 0.5) / KERB_WIDTH_PX)[None, :]
+    v = ((np.arange(KERB_HEIGHT_PX) + 0.5) / KERB_HEIGHT_PX)[:, None]
+
+    # --- 縞 ---
+    #
+    # **縁を少しぼかす。** 完全な矩形にすると、斜めから見たときに
+    # 境界が階段状に見える（白線と同じ話）。
+    phase = np.mod(v * KERB_STRIPES_PER_TILE, 1.0)
+    # 1 ブロックは KERB_HEIGHT_PX / KERB_STRIPES_PER_TILE 画素。境界を 2 画素で渡す。
+    softness = 2.0 * KERB_STRIPES_PER_TILE / KERB_HEIGHT_PX
+    red = np.clip((0.5 - phase) / softness, 0.0, 1.0) \
+        * np.clip(phase / softness, 0.0, 1.0)
+    red = np.broadcast_to(red, (KERB_HEIGHT_PX, KERB_WIDTH_PX))
+
+    colour = (np.asarray(KERB_WHITE)[None, None, :] * (1.0 - red[..., None])
+              + np.asarray(KERB_RED)[None, None, :] * red[..., None])
+
+    # --- 汚れ ---
+    #
+    # **路面側が汚い。** タイヤが乗る側にゴムと砂が溜まる。
+    # 一様に汚すと「灰色がかった縞」にしかならない。
+    road_side = np.clip(1.0 - u / 0.35, 0.0, 1.0)
+    grime = build_grain(rng, KERB_WIDTH_PX, KERB_HEIGHT_PX)
+    dirt = np.clip(road_side * 0.45 + (grime - 0.5) * 0.30, 0.0, 1.0)
+    colour = colour * (1.0 - dirt[..., None] * 0.55)
+
+    # --- 外側の縁 ---
+    #
+    # 一番外の 1 割は、外側の垂直面が使う列（`build_kerbs()` は u=1 を
+    # 割り当てる）。**少し暗くする。** 上面と同じ明るさだと角が消える。
+    edge = np.clip((u - 0.90) / 0.10, 0.0, 1.0)
+    colour = colour * (1.0 - np.broadcast_to(edge, red.shape)[..., None] * 0.30)
+
+    # --- ラフネス ---
+    #
+    # 塗料は滑らか、汚れた所と外側の縁は粗い。
+    rough = np.full((KERB_HEIGHT_PX, KERB_WIDTH_PX), 0.45, dtype=np.float64)
+    rough = rough + dirt * 0.35 + np.broadcast_to(edge, red.shape) * 0.15
+    rough = np.clip(rough + (grime - 0.5) * 0.08, 0.0, 1.0)
+
+    return {"kerb_diff": np.clip(colour, 0.0, 1.0), "kerb_rough": rough}
 
 
 def build() -> dict:
@@ -240,6 +315,7 @@ def main() -> int:
     args = parser.parse_args()
 
     images = build()
+    images.update(build_kerb(np.random.default_rng(SEED + 1)))
 
     # **描けているかを数値で確かめる。** 真っ白や真っ黒を書き出して
     # 「生成した」と言わないため。
@@ -247,6 +323,18 @@ def main() -> int:
     print("白線とひびが占める面積: {:.3%}".format(markings_area))
     if markings_area < 0.002 or markings_area > 0.25:
         print("!! 面積が想定外。白線が消えているか、塗り潰している", flush=True)
+        return 1
+
+    # 縁石も同じく数値で見る。**赤と白の両方が要る。**
+    # 片方が消えても「縞のテクスチャを書き出した」とは言える状態になるので、
+    # 面積で止める（憲法ルール6）。
+    kerb = images["kerb_diff"]
+    reddish = float(((kerb[..., 0] - kerb[..., 2]) > 0.15).mean())
+    whitish = float((kerb.min(axis=2) > 0.45).mean())
+    print("縁石 赤: {:.1%} / 白: {:.1%}".format(reddish, whitish))
+    if reddish < 0.25 or whitish < 0.25:
+        print("!! 縁石の縞が片方しか無い（赤 {:.1%} / 白 {:.1%}）"
+              .format(reddish, whitish), flush=True)
         return 1
 
     if args.check:

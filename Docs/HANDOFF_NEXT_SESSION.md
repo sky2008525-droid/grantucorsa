@@ -296,8 +296,17 @@ UnrealEditor-Cmd ... -ExecutePythonScript="build_level.py <key>"
 2. **タイヤの煙**（Niagara）。スリップ率と荷重で量を決める。**未着手**
 3. **マフラーの煙**。スロットルと回転数で。**未着手**
 4. ~~路面の厚み・ひび割れ・白線~~ → **実装済み**
-   （`Tracks/road_texture.py` が手続き的に描く）。**縁石だけ未着手**
-5. ~~ボディカラー選択~~ → **実装済み**（§1.3）
+   （`Tracks/road_texture.py` が手続き的に描く）
+5. ~~縁石（カーブ）~~ → **実装済み**（2026-09-02）。
+   どこに敷くかは `Tracks/kerb.py`（R ≤ 180 m のコーナーのみ。
+   直線には敷かない）、メッシュは `Blender/build_track.py` の
+   `build_kerbs()`、赤白の縞は `Tracks/road_texture.py` の `build_kerb()`。
+   **全4コースで画面確認済み**
+6. ~~三角コーン（パイロン）~~ → **実装済み**（2026-09-02）。
+   OpenGameArt の CC0 モデル。出典は `Docs/PHASE15_DATA_LICENCE.md` §6.2。
+   コーナーの立ち上がり外側の路肩に置く（`PROP_PLAN` の `corner_exit`）。
+   **当たり判定は無い**（衝突は別作業）
+7. ~~ボディカラー選択~~ → **実装済み**（§1.3）
 
 > **Niagara は script から作れない。** 煙は Niagara のシステムを
 > エディタの UI で作る必要がある。script だけで済ませるなら、

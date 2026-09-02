@@ -1,0 +1,22 @@
+{
+ "traffic_cone": {
+  "name": "Traffic cone",
+  "authors": {
+   "Savino": "modeling"
+  },
+  "license": "CC0",
+  "source": "https://opengameart.org/content/traffic-cone",
+  "file_url": "https://opengameart.org/sites/default/files/high.zip",
+  "md5": "6aa7af159d0a931b03f84690193f0b1b",
+  "fetched": "2026-09-02",
+  "kind": "models",
+  "gltf": "traffic_cone.glb",
+  "original": "high.obj",
+  "size_m": [
+   0.38,
+   0.38,
+   0.7
+  ],
+  "bytes": 744624
+ }
+}

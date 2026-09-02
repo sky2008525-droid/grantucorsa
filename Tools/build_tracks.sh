@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# コース定義から路面・地面メッシュと樹木配置を作る（全コース）。
+# コース定義から路面・縁石・地面メッシュと樹木配置を作る（全コース）。
+#
+# **縁石の赤白テクスチャは別に作る。**
+#     python Tracks/road_texture.py
 #
 #     ./Tools/build_tracks.sh              # 全部
 #     ./Tools/build_tracks.sh mountain_pass  # 1本だけ
@@ -50,10 +53,12 @@ for KEY in $KEYS; do
         "$WIN_REPO/Tracks/$KEY.json" "$OUT" 2>&1 \
         | grep -E "^\[track\]|!!" || true
 
-    if [ ! -f "$REPO/Tracks/Export/$KEY/TrackRoad.fbx" ]; then
-        echo "ERROR  $KEY: 路面メッシュが出来ていない" >&2
-        exit 1
-    fi
+    for MESH in TrackRoad TrackKerb TrackGround; do
+        if [ ! -f "$REPO/Tracks/Export/$KEY/$MESH.fbx" ]; then
+            echo "ERROR  $KEY: $MESH.fbx が出来ていない" >&2
+            exit 1
+        fi
+    done
 done
 
 echo
