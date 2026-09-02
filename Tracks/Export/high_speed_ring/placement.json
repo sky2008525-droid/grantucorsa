@@ -17,6 +17,7 @@
  "ground_fbx": "TrackGround.fbx",
  "structure_fbx": {
   "TrackDistant": "TrackDistant.fbx",
+  "TrackSea": "TrackSea.fbx",
   "TrackViaduct": "TrackViaduct.fbx"
  },
  "kerb_spans": 5,

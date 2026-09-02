@@ -255,6 +255,49 @@ def make_road_material(name, diffuse, normal, rough,
     return material
 
 
+def make_colour_material(name, colour, roughness=0.5, metallic=0.0):
+    """テクスチャを使わず、色だけのマテリアルを作る。
+
+    **水面のように、手持ちのテクスチャに該当が無いもの用。**
+    PolyHaven の textures に水は入っていない。無理に別のテクスチャを
+    貼るより、色と粗さだけで置くほうが素直である
+    （粗さを下げると空を映して水らしくなる）。
+    """
+    package = PKG_MATERIAL
+    unreal.EditorAssetLibrary.make_directory(package)
+    asset_path = "%s/%s" % (package, name)
+    if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+        unreal.EditorAssetLibrary.delete_asset(asset_path)
+
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    material = tools.create_asset(name, package, unreal.Material,
+                                  unreal.MaterialFactoryNew())
+    if material is None:
+        unreal.log_error("[ZN6 level] マテリアルを作れない: %s" % asset_path)
+        return None
+
+    lib = unreal.MaterialEditingLibrary
+    base = lib.create_material_expression(
+        material, unreal.MaterialExpressionVectorParameter, -600, -200)
+    base.set_editor_property("parameter_name", "BaseColour")
+    base.set_editor_property("default_value", colour)
+    lib.connect_material_property(base, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    for value, prop, y in ((roughness, unreal.MaterialProperty.MP_ROUGHNESS, 60),
+                           (metallic, unreal.MaterialProperty.MP_METALLIC, 220)):
+        node = lib.create_material_expression(
+            material, unreal.MaterialExpressionScalarParameter, -600, y)
+        node.set_editor_property("parameter_name",
+                                 "Roughness" if y == 60 else "Metallic")
+        node.set_editor_property("default_value", value)
+        lib.connect_material_property(node, "", prop)
+
+    lib.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(material.get_path_name(),
+                                         only_if_is_dirty=False)
+    return material
+
+
 def make_surface_material(name, diffuse, normal, rough, uv_scale):
     """テクスチャ3枚から不透明マテリアルを1つ作る。
 
@@ -386,17 +429,25 @@ def build_track_materials():
         texture("concrete_road_barrier_rough"),
         uv_scale=1.0)
 
+    # 海。**テクスチャが無いので色で塗る。**
+    # 水のテクスチャは PolyHaven の textures に入っていない。
+    # board のような平らな青にせず、粗さを下げて空を映すようにする。
+    sea = make_colour_material("M_TrackSea",
+                               unreal.LinearColor(0.012, 0.035, 0.055, 1.0),
+                               roughness=0.08, metallic=0.0)
+
     log("マテリアル: road=%s kerb=%s ground=%s distant=%s structure=%s"
         % (road.get_name() if road else "None",
            kerb.get_name() if kerb else "None",
            ground.get_name() if ground else "None",
            distant.get_name() if distant else "None",
            structure.get_name() if structure else "None"))
-    return road, kerb, ground, distant, structure
+    return road, kerb, ground, distant, structure, sea
 
 
 def place_track(road_material, kerb_material, ground_material,
-                distant_material=None, structure_material=None):
+                distant_material=None, structure_material=None,
+                sea_material=None):
     """路面と地面を置く。
 
     **メッシュは既にワールド座標で作られている**（Blender が中心線から
@@ -405,14 +456,16 @@ def place_track(road_material, kerb_material, ground_material,
     placed = []
     # **道路構造はコースによって在ったり無かったりする。**
     # 峠に橋脚は無いし、サーキットにガードレールは無い。
-    optional = {"TrackDistant", "TrackGuardrail", "TrackViaduct", "TrackPit"}
+    optional = {"TrackDistant", "TrackGuardrail", "TrackViaduct",
+                "TrackPit", "TrackSea"}
     for mesh_name, material in (("TrackRoad", road_material),
                                 ("TrackKerb", kerb_material),
                                 ("TrackGround", ground_material),
                                 ("TrackDistant", distant_material),
                                 ("TrackGuardrail", structure_material),
                                 ("TrackViaduct", structure_material),
-                                ("TrackPit", road_material)):
+                                ("TrackPit", road_material),
+                                ("TrackSea", sea_material)):
         mesh = find_asset("%s/%s" % (PKG_TRACK, TRACK_KEY), mesh_name,
                           unreal.StaticMesh)
         if mesh is None:
@@ -691,9 +744,10 @@ def main():
         return
 
     (road_material, kerb_material, ground_material,
-     distant_material, structure_material) = build_track_materials()
+     distant_material, structure_material,
+     sea_material) = build_track_materials()
     place_track(road_material, kerb_material, ground_material,
-                distant_material, structure_material)
+                distant_material, structure_material, sea_material)
     place_trees(root)
     place_props(root)
     place_lighting()

@@ -87,6 +87,12 @@ class DistantTerrain:
     #: 立ち上がりきるまでの距離 [m]（近景の端から）。
     blend_m: float = 250.0
 
+    #: 遠景の基準面を上下させる量 [m]。
+    #:
+    #: **負にすると、起伏の低いところが水面より下になる。**
+    #: 湾岸の都市高速は、海と埋立地が入り混じった景色になる。
+    base_offset_m: float = 0.0
+
     #: 山を何重に見せるか。**空気遠近の代わり。**
     #:
     #: 遠くの尾根ほど高く、波長も長くする。1 枚の雑音だけだと
@@ -120,6 +126,13 @@ class Environment:
 
     #: 遮音壁を立てるか（高架）。
     noise_wall: bool = False
+
+    #: 海面の標高 [m]。`None` なら海を作らない。
+    #:
+    #: 指摘: 「首都高はオブジェクトめっちゃあると思います。（略）**海**
+    #: めちゃめちゃありますよ」。湾岸の都市高速は、走っている間ずっと
+    #: 水面が見えている。
+    sea_level_m: Optional[float] = None
 
     #: ピットの建屋に使うアセット名。`None` ならピットを作らない。
     #:
@@ -268,7 +281,10 @@ ENVIRONMENTS: Dict[str, Environment] = {
         relief_amplitude_m=2.5,
         relief_wavelength_m=260.0,
         distant=DistantTerrain(
-            amplitude_m=18.0, wavelength_m=1400.0, reach_m=2200.0, ridges=1),
+            # **基準面を海面より下げる。** そうしないと陸しか出来ず、
+            # 水面が地面に隠れて 1 ピクセルも見えない。
+            amplitude_m=26.0, wavelength_m=1250.0, reach_m=2400.0, ridges=2,
+            base_offset_m=-11.0),
         tree_layers=[
             # 街路樹。**桁の下**なので、地面の高さに乗る。
             TreeLayer(
@@ -313,6 +329,8 @@ ENVIRONMENTS: Dict[str, Environment] = {
         guardrail=False,          # 遮音壁が兼ねる
         viaduct_piers=True,
         noise_wall=True,
+        # **海。** 桁の高さ 11〜17 m から見下ろす位置に水面を置く。
+        sea_level_m=-3.0,
     ),
 
     # -----------------------------------------------------------------

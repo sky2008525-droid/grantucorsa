@@ -420,7 +420,7 @@ def build_distant_terrain(points, extent, distant, base_z_m):
             total += (1.0 - abs(n)) * amplitude
             amplitude *= 0.55
             wavelength *= 0.42
-        return base_z_m + total * mask
+        return base_z_m + distant.base_offset_m + total * mask
 
     grid = []
     for iy in range(ny):
@@ -643,6 +643,41 @@ def build_viaduct(points, width_m, ground_level_m, piers=True, wall=True):
     obj = bpy.data.objects.new("TrackViaduct", mesh)
     bpy.context.scene.collection.objects.link(obj)
     return obj, stats["faces"]
+
+
+def build_sea(extent, distant, sea_level_m):
+    """水面。**1 枚の板。**
+
+    起伏を付けない。付けると遠景の地形と交差して、水面が斑に切れる。
+    波は静止画では見えないうえ、動かすには物理と関係ない更新が要る。
+    **見えるところだけを作る**（憲法ルール18: 演出）。
+    """
+    x0, x1, y0, y1 = extent
+    reach = distant.reach_m if distant else 1500.0
+    # **遠景より一回り広く取る。** 同じ大きさだと、水平線の手前で
+    # 水面が切れて世界の縁が見える。
+    margin = reach * 1.4
+    sx0, sx1 = x0 - margin, x1 + margin
+    sy0, sy1 = y0 - margin, y1 + margin
+
+    mesh = bpy.data.meshes.new("TrackSea")
+    bm = bmesh.new()
+    uv_layer = bm.loops.layers.uv.new("UVMap")
+
+    corners = [(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1)]
+    verts = [bm.verts.new((x, y, sea_level_m)) for x, y in corners]
+    face = bm.faces.new(verts)
+    scale = 1.0 / 90.0
+    for loop in face.loops:
+        loop[uv_layer].uv = (loop.vert.co.x * scale, loop.vert.co.y * scale)
+
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+
+    obj = bpy.data.objects.new("TrackSea", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj, 1
 
 
 def build_pit(points, lane):
@@ -1419,6 +1454,11 @@ def main():
             return 1
         extras.append(rail)
         log("guardrail: %d 面（高さ %.2f m）", rail_faces, GUARDRAIL_HEIGHT_M)
+
+    if env.sea_level_m is not None:
+        sea, sea_faces = build_sea(extent, env.distant, env.sea_level_m)
+        extras.append(sea)
+        log("sea: 水面 %.1f m", env.sea_level_m)
 
     # **ピット。** 直線が短いコースには作らない（幅 9 m の峠に
     # ピットレーンがあったらおかしい）。
