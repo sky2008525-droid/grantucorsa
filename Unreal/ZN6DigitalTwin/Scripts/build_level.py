@@ -365,27 +365,58 @@ def build_track_materials():
                                      texture("kerb_rough"), uv_scale=1.0)
     make_tyre_mark_material()
 
-    log("マテリアル: road=%s kerb=%s ground=%s"
+    # --- 道路構造のマテリアル -------------------------------------------
+    #
+    # **遠景の山を近くの地面と同じ材質にしない。** 同じにすると、
+    # 2.6 km 先の尾根に手前と同じ草のテクスチャが同じ大きさで貼られ、
+    # 距離が分からなくなる（遠くのものほど細かく見えるはずがない）。
+    distant = make_surface_material(
+        "M_TrackDistant",
+        texture("aerial_grass_rock_diff"),
+        texture("aerial_grass_rock_nor_gl"),
+        texture("aerial_grass_rock_rough"),
+        uv_scale=1.0)
+
+    # ガードレールと高架の構造物。**手続きで作った面**なので UV は粗い。
+    # コンクリート／金属らしい無地で塗る。
+    structure = make_surface_material(
+        "M_TrackStructure",
+        texture("concrete_road_barrier_diff"),
+        texture("concrete_road_barrier_nor_gl"),
+        texture("concrete_road_barrier_rough"),
+        uv_scale=1.0)
+
+    log("マテリアル: road=%s kerb=%s ground=%s distant=%s structure=%s"
         % (road.get_name() if road else "None",
            kerb.get_name() if kerb else "None",
-           ground.get_name() if ground else "None"))
-    return road, kerb, ground
+           ground.get_name() if ground else "None",
+           distant.get_name() if distant else "None",
+           structure.get_name() if structure else "None"))
+    return road, kerb, ground, distant, structure
 
 
-def place_track(road_material, kerb_material, ground_material):
+def place_track(road_material, kerb_material, ground_material,
+                distant_material=None, structure_material=None):
     """路面と地面を置く。
 
     **メッシュは既にワールド座標で作られている**（Blender が中心線から
     直接生成した）ので、原点にそのまま置く。ここで位置を調整しないこと。
     """
     placed = []
+    # **道路構造はコースによって在ったり無かったりする。**
+    # 峠に橋脚は無いし、サーキットにガードレールは無い。
+    optional = {"TrackDistant", "TrackGuardrail", "TrackViaduct"}
     for mesh_name, material in (("TrackRoad", road_material),
                                 ("TrackKerb", kerb_material),
-                                ("TrackGround", ground_material)):
+                                ("TrackGround", ground_material),
+                                ("TrackDistant", distant_material),
+                                ("TrackGuardrail", structure_material),
+                                ("TrackViaduct", structure_material)):
         mesh = find_asset("%s/%s" % (PKG_TRACK, TRACK_KEY), mesh_name,
                           unreal.StaticMesh)
         if mesh is None:
-            unreal.log_error("[ZN6 level] %s が無い" % mesh_name)
+            if mesh_name not in optional:
+                unreal.log_error("[ZN6 level] %s が無い" % mesh_name)
             continue
         actor = spawn_mesh(mesh, unreal.Vector(0.0, 0.0, 0.0),
                            unreal.Rotator(0.0, 0.0, 0.0), mesh_name)
@@ -658,8 +689,10 @@ def main():
         unreal.log_error("[ZN6 level] レベルを作れない: %s" % LEVEL_PATH)
         return
 
-    road_material, kerb_material, ground_material = build_track_materials()
-    place_track(road_material, kerb_material, ground_material)
+    (road_material, kerb_material, ground_material,
+     distant_material, structure_material) = build_track_materials()
+    place_track(road_material, kerb_material, ground_material,
+                distant_material, structure_material)
     place_trees(root)
     place_props(root)
     place_lighting()

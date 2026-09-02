@@ -35,6 +35,7 @@ from __future__ import annotations
 import math
 from typing import Callable, Dict, List, Tuple
 
+from elevation import profile_for
 from physics_test_track import Track, _Builder, closure_error, physics_test_track
 
 #: 直線 / 円弧の指定。
@@ -296,7 +297,41 @@ def build(key: str, spacing_m: float = 1.0) -> Track:
     if key not in CATALOGUE:
         raise KeyError("知らないコース: {}（ある: {}）".format(
             key, ", ".join(sorted(CATALOGUE))))
-    return CATALOGUE[key](spacing_m)
+    track = CATALOGUE[key](spacing_m)
+    apply_elevation(track, key)
+    return track
+
+
+def apply_elevation(track: Track, key: str) -> None:
+    """縦断を各点へ入れる。**平面形を解いたあとに掛ける。**
+
+    順序が要点である。閉合（始点に戻るか）は平面形だけの話で、
+    標高は関係ない。先に平面形を閉じてから縦断を乗せれば、
+    **どちらの条件も互いを壊さない。**
+
+    縦断そのものが守るべき条件（周回で閉じる、勾配が急すぎない）は
+    `ElevationProfile.validate` が見る。**ここで黙って通さない。**
+    """
+    profile = profile_for(key)
+    if profile.is_flat():
+        return
+
+    length_m = track.length_m
+    problems = profile.validate(length_m)
+    if problems:
+        # **不正な縦断を黙って使わない**（憲法ルール6）。
+        raise ElevationError(
+            "{} の縦断が条件を満たしていない: {}".format(
+                key, " / ".join(problems)))
+
+    for point in track.points:
+        u = point.s_m / length_m
+        point.z_m = profile.height_at(u, length_m)
+        point.gradient_pct = profile.gradient_at(u, length_m)
+
+
+class ElevationError(Exception):
+    """縦断が条件を満たしていない。**黙って走れない坂を作らない。**"""
 
 
 def summary(track: Track) -> str:

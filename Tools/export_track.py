@@ -30,6 +30,7 @@ sys.path.insert(0, str(REPO_ROOT / "Tracks"))
 
 from Tracks.physics_test_track import closure_error  # noqa: E402
 from Tracks.track_catalogue import CATALOGUE, build  # noqa: E402
+from Tracks.elevation import profile_for  # noqa: E402
 
 OUTPUT_DIR = REPO_ROOT / "Tracks"
 
@@ -54,6 +55,7 @@ TREE_MAX_OFFSET_M = 70.0
 
 def export(key: str) -> int:
     track = build(key, spacing_m=1.0)
+    elevation = profile_for(key)
     output = output_path(key)
 
     position_error, heading_error = closure_error(track)
@@ -74,6 +76,8 @@ def export(key: str) -> int:
             "y_m": p.y_m,
             "heading_rad": p.heading_rad,
             "curvature_1pm": p.curvature_1pm,
+            "z_m": p.z_m,
+            "gradient_pct": p.gradient_pct,
             "label": p.label,
         }
         for p in track.points
@@ -101,6 +105,15 @@ def export(key: str) -> int:
         "shoulder_m": SHOULDER_M,
         "tree_offset_m": [TREE_MIN_OFFSET_M, TREE_MAX_OFFSET_M],
         "spacing_m": track.points[1].s_m - track.points[0].s_m,
+        # **縦断の性格を持ち回る。** 高架かどうかで地面の作り方が変わる
+        # （高架は路面に追従させない。桁の下は地面のまま）。
+        "elevation": {
+            "is_viaduct": elevation.is_viaduct,
+            "ground_level_m": elevation.ground_level_m,
+            "min_z_m": min(p.z_m for p in track.points),
+            "max_z_m": max(p.z_m for p in track.points),
+            "max_gradient_pct": max(abs(p.gradient_pct) for p in track.points),
+        },
         "closure": {"position_error_m": position_error, "heading_error_rad": heading_error},
         "sections": labels,
         "points": points,

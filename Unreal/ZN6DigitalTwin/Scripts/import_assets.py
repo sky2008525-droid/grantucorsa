@@ -265,10 +265,19 @@ def import_track(root):
     for key in keys:
         folder = os.path.join(root, "Tracks", "Export", key)
         tasks = []
-        for name in ("TrackRoad.fbx", "TrackKerb.fbx", "TrackGround.fbx"):
+        # **道路構造は「あれば取り込む」。**
+        #
+        # 遠景の山・ガードレール・高架の橋脚は、コースによって在ったり
+        # 無かったりする（`Tracks/environment.py` が決める）。峠に橋脚は
+        # 無いし、サーキットにガードレールは無い。**無いことを error に
+        # しない**（error にすると、正常な状態が毎回赤く出て意味を失う）。
+        required = ("TrackRoad.fbx", "TrackKerb.fbx", "TrackGround.fbx")
+        optional = ("TrackDistant.fbx", "TrackGuardrail.fbx", "TrackViaduct.fbx")
+        for name in required + optional:
             path = os.path.join(folder, name)
             if not os.path.isfile(path):
-                unreal.log_error("[ZN6 import] %s が無い" % path)
+                if name in required:
+                    unreal.log_error("[ZN6 import] %s が無い" % path)
                 continue
             tasks.append(build_task(path, "%s/%s" % (PKG_TRACK, key),
                                     static_mesh_options()))

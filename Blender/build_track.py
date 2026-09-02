@@ -7,17 +7,35 @@
 が生成し、`Tools/export_track.py` が JSON にしたものだけを読む。
 描画側が独自にコースを持つと、物理と絵がずれる。
 
-## 起伏を走行面に入れてはいけない
+## 起伏について（**この節は 2026-09-02 に書き換えた**）
 
-物理モデル（`Physics/vehicle.py`）は**平面3自由度**（前後・左右・ヨー）で、
-上下方向の動特性を持たない。サスペンションのバネ定数・減衰力が `unknown`
-のため、`Tracks/physics_test_track.py` は段差も意図的に外している。
+**以前ここには「起伏を走行面に入れてはいけない」と書いてあった。**
+その理由は「物理が平面3自由度で、上下方向の動特性を持たないから」
+というもので、当時は正しかった。
 
-したがって**車は常に z=0 を走る。** 走行面に起伏を付けると、車が地面に
-埋まる／浮く。起伏は路肩の外側にだけ入れ、走行面は完全な平面に保つ。
+**今は違う。** 次の3つが揃っている:
 
-「見た目のために少しだけ傾ける」も駄目。物理が知らない量を絵に入れると、
-**モデルの限界が見えなくなる。**
+  - `Physics/terrain.py` の `Heightfield` が4輪それぞれの下の地面を返す
+  - `body_gravity()` が斜面の重力を車体座標へ分解する
+  - `Physics/ride.py` が heave / pitch / roll を解き、浮いた輪の
+    接地力を 0 にする
+
+つまり**坂は物理として扱える。** 縦断（どこが上りでどこが下りか）は
+`Tracks/elevation.py` が持ち、`Tools/export_track.py` が各点の `z_m` と
+して配る。ここはそれを読むだけで、**形状をここで決めない。**
+
+古い注記を残したまま「峠」を平地で作っていたので、**峠が峠に見えない**
+という指摘を受けた。制約が消えたら注記も消すこと。
+
+### 高架（`is_viaduct`）
+
+都市高速の高架は、**桁が地面から離れて浮いている。** 峠のように
+「路面が上がれば周りの地面も上がる」のではない。したがって:
+
+  - 走行面は縦断のとおりの高さ
+  - 地面（見た目）は下のまま。その間に橋脚と桁を立てる
+  - **高さ場は桁に追従させる**（車は桁の上を走るので）。桁の外側では
+    下の地面まで落とす。**落ちるのは正しい挙動**である
 """
 
 from __future__ import annotations
@@ -40,6 +58,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "Tracks"))
 from kerb import (KERB_HEIGHT_M, KERB_RISE_M, KERB_TILE_LENGTH_M,  # noqa: E402
                   KERB_WIDTH_M, corner_exit_indices, kerb_spans)
+from environment import (all_prop_kinds, all_species,  # noqa: E402
+                         environment_for)
 
 # 路面の外側に付ける起伏の大きさ [m] と横方向の波長 [m]。
 # **控えめにする。** 平坦な走行面から急に山が立ち上がると不自然。
@@ -62,6 +82,34 @@ DRIVABLE_FLAT_MARGIN_M = 120.0
 
 # 起伏が立ち上がりきるまでの距離 [m]
 RELIEF_BLEND_M = 200.0
+
+# 地面の高さを決めるとき、中心線を何 m ごとに標本化するか。
+# **細かくしても地面の解像度（4 m）以上には効かない。**
+GROUND_HEIGHT_SAMPLE_M = 8.0
+
+# 地面の高さを「近くの中心線」から作るときの効く距離 [m]。
+#
+# **最近傍の標高をそのまま使わない。** ヘアピンでは往路と復路が
+# 20 m と離れずに並び、標高が 10 m 違うことがある。最近傍だと
+# その中間に垂直な崖が立つ。距離で重み付けして混ぜれば斜面になる。
+GROUND_HEIGHT_BLEND_M = 30.0
+
+# 路面のそばで「いちばん近い点の標高」をそのまま使う幅 [m]（路面端から）。
+#
+# **ここを平均で作ると路面が埋まる。** 勾配 10% の区間では、30 m 先の
+# 標高を混ぜるだけで 1〜3 m ずれる。
+GROUND_ROAD_CORRIDOR_M = 14.0
+
+# そこから平均へ寄せきるまでの距離 [m]。
+GROUND_ROAD_BLEND_M = 26.0
+
+# 高架の桁が路面の外へ何 m 張り出しているか [m]（片側）。
+# **路肩ぶん。** ここまでは路面と同じ高さで、車が乗っていられる。
+VIADUCT_DECK_SHOULDER_M = 2.5
+
+# 桁の縁から下の地面まで落ちきる距離 [m]。
+# **短くする。** 長いと高架の縁ではなく土手に見える。
+VIADUCT_EDGE_DROP_M = 3.0
 
 # 地面を路面より何 m 下げるか。
 #
@@ -134,21 +182,26 @@ def build_road(points, width_m):
     # 幅に対する比で位置を決めたいので、こちらは実寸にしない。
     mark_layer = bm.loops.layers.uv.new("UVMap2")
 
-    # 上面（走行面。**必ず z=0**）と、その真下の縁。
+    # 上面（走行面）と、その真下の縁。
+    #
+    # **高さは中心線の `z_m` をそのまま使う。** 左右の端も同じ高さに
+    # 置く（横断勾配＝バンクは付けていない。付けるならタイヤ荷重にも
+    # 効く量なので、絵だけで入れてはいけない）。
     rows = []
     for p in points:
         heading = p["heading_rad"]
+        z = p.get("z_m", 0.0)
         # 左手側の法線（物理の座標系で Y が左）
         nx = -math.sin(heading)
         ny = math.cos(heading)
         lx, ly = p["x_m"] + nx * half, p["y_m"] + ny * half
         rx, ry = p["x_m"] - nx * half, p["y_m"] - ny * half
 
-        left = bm.verts.new((lx, ly, 0.0))
-        right = bm.verts.new((rx, ry, 0.0))
-        # **下へ押し出す。** 上面は動かさない（物理は z=0 の平面を走る）。
-        left_low = bm.verts.new((lx, ly, -ROAD_THICKNESS_M))
-        right_low = bm.verts.new((rx, ry, -ROAD_THICKNESS_M))
+        left = bm.verts.new((lx, ly, z))
+        right = bm.verts.new((rx, ry, z))
+        # **下へ押し出す。** 上面は動かさない（そこが走行面）。
+        left_low = bm.verts.new((lx, ly, z - ROAD_THICKNESS_M))
+        right_low = bm.verts.new((rx, ry, z - ROAD_THICKNESS_M))
         rows.append((left, right, left_low, right_low, p["s_m"]))
 
     bm.verts.ensure_lookup_table()
@@ -274,9 +327,11 @@ def build_kerbs(points, width_m, spacing_m):
                 # 左手側の法線（物理の座標系で Y が左）に side を掛ける
                 nx = -math.sin(heading) * side
                 ny = math.cos(heading) * side
+                road_z = p.get("z_m", 0.0)
                 column = [bm.verts.new((p["x_m"] + nx * (half + lateral),
-                                        p["y_m"] + ny * (half + lateral), z))
-                          for lateral, z in KERB_PROFILE]
+                                        p["y_m"] + ny * (half + lateral),
+                                        road_z + dz))
+                          for lateral, dz in KERB_PROFILE]
                 rows.append((column, travelled))
 
             for row_index in range(len(rows) - 1):
@@ -320,6 +375,313 @@ def centreline_sampler(points, stride):
     return [(p["x_m"], p["y_m"]) for p in points[::stride]]
 
 
+def build_distant_terrain(points, extent, distant, base_z_m):
+    """遠景の山並み。**物理の高さ場には入らない**（車が行けない）。
+
+    近景の地面（4 m 格子）をそのまま 2.6 km 先まで伸ばすとセルが
+    200 万個を超える。遠景は**別メッシュ・粗い格子**で作る。
+
+    **1 枚の雑音では山並みにならない。** でこぼこした平原に見える。
+    波長と振幅の違う層を重ねると、手前の尾根の向こうに次の尾根が
+    見える形になる（`ridges`）。
+    """
+    x0, x1, y0, y1 = extent
+    reach = distant.reach_m
+    dx0, dx1 = x0 - reach, x1 + reach
+    dy0, dy1 = y0 - reach, y1 + reach
+
+    cell = distant.cell_m
+    nx = int((dx1 - dx0) / cell) + 1
+    ny = int((dy1 - dy0) / cell) + 1
+    log("distant grid %d x %d (%.0f x %.0f m)", nx, ny, dx1 - dx0, dy1 - dy0)
+
+    mesh = bpy.data.meshes.new("TrackDistant")
+    bm = bmesh.new()
+    uv_layer = bm.loops.layers.uv.new("UVMap")
+
+    def height(x, y):
+        # 近景の縁からどれだけ外れたか
+        outside = max(x0 - x, 0.0, x - x1, y0 - y, 0.0, y - y1)
+        if outside <= 0.0:
+            return None                    # 近景の内側。ここには作らない
+        t = min(outside / distant.blend_m, 1.0)
+        mask = t * t * (3.0 - 2.0 * t)
+
+        total = 0.0
+        amplitude = distant.amplitude_m
+        wavelength = distant.wavelength_m
+        for ridge in range(distant.ridges):
+            n = noise.noise(Vector((x / wavelength, y / wavelength,
+                                    ridge * 11.7)))
+            # **絶対値を取って尾根にする。** 素の雑音は丘の集まりで、
+            # 山の稜線に見えない。1-|n| は谷が平らで尾根が立つ。
+            total += (1.0 - abs(n)) * amplitude
+            amplitude *= 0.55
+            wavelength *= 0.42
+        return base_z_m + total * mask
+
+    grid = []
+    for iy in range(ny):
+        row = []
+        y = dy0 + iy * cell
+        for ix in range(nx):
+            x = dx0 + ix * cell
+            z = height(x, y)
+            row.append(None if z is None else bm.verts.new((x, y, z)))
+        grid.append(row)
+
+    bm.verts.ensure_lookup_table()
+    uv_scale = 1.0 / 180.0
+    faces = 0
+    for iy in range(ny - 1):
+        for ix in range(nx - 1):
+            verts = (grid[iy][ix], grid[iy][ix + 1],
+                     grid[iy + 1][ix + 1], grid[iy + 1][ix])
+            if any(v is None for v in verts):
+                continue                   # 近景と重なる部分は作らない
+            try:
+                face = bm.faces.new(verts)
+            except ValueError:
+                continue
+            for loop in face.loops:
+                loop[uv_layer].uv = (loop.vert.co.x * uv_scale,
+                                     loop.vert.co.y * uv_scale)
+            faces += 1
+
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+
+    obj = bpy.data.objects.new("TrackDistant", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj, faces
+
+
+#: ガードレールの高さ [m]（路面から板の上端まで）。
+#:
+#: 日本のガードレールの設置高さはおおむね 0.6〜0.8 m の桁にある
+#: （見た目で腰くらい）。**条文を確認していないので実測扱いにしない**
+#: （憲法ルール2）。板の上下端で 1 枚に見せる。
+GUARDRAIL_HEIGHT_M = 0.75
+GUARDRAIL_PANEL_M = 0.32
+GUARDRAIL_OFFSET_M = 1.4
+GUARDRAIL_POST_SPACING_M = 4.0
+GUARDRAIL_POST_WIDTH_M = 0.11
+
+
+def build_guardrail(points, width_m):
+    """路肩にガードレールを立てる。**峠に要る。**
+
+    **手続きで作る。** これは「道路構造の一部」であって飾りではない。
+    路面の形が決まればガードレールの形も決まるので、外から持ってくる
+    モデルを並べるより、中心線から生成するほうが確実に沿う。
+
+    支柱も立てる。板だけだと宙に浮いて見える。
+    """
+    half = width_m / 2.0
+    mesh = bpy.data.meshes.new("TrackGuardrail")
+    bm = bmesh.new()
+    uv_layer = bm.loops.layers.uv.new("UVMap")
+
+    spacing = points[1]["s_m"] - points[0]["s_m"]
+    post_step = max(int(GUARDRAIL_POST_SPACING_M / spacing), 1)
+
+    top = GUARDRAIL_HEIGHT_M
+    bottom = GUARDRAIL_HEIGHT_M - GUARDRAIL_PANEL_M
+
+    count = len(points)
+    faces = 0
+    for side in (+1.0, -1.0):
+        previous = None
+        for index in range(count + 1):
+            p = points[index % count]
+            heading = p["heading_rad"]
+            z = p.get("z_m", 0.0)
+            nx = -math.sin(heading) * side
+            ny = math.cos(heading) * side
+            lateral = half + GUARDRAIL_OFFSET_M
+            x = p["x_m"] + nx * lateral
+            y = p["y_m"] + ny * lateral
+
+            current = (bm.verts.new((x, y, z + bottom)),
+                       bm.verts.new((x, y, z + top)),
+                       p["s_m"])
+            if previous is not None:
+                quad = (previous[0], previous[1], current[1], current[0])
+                if side < 0.0:
+                    quad = tuple(reversed(quad))
+                try:
+                    face = bm.faces.new(quad)
+                except ValueError:
+                    previous = current
+                    continue
+                for loop in face.loops:
+                    along = (previous[2] if loop.vert in previous[:2]
+                             else current[2]) / 3.0
+                    high = loop.vert in (previous[1], current[1])
+                    loop[uv_layer].uv = (along, 1.0 if high else 0.0)
+                faces += 1
+            previous = current
+
+            # 支柱
+            if index % post_step == 0 and index < count:
+                w = GUARDRAIL_POST_WIDTH_M / 2.0
+                tx, ty = math.cos(heading) * w, math.sin(heading) * w
+                a = bm.verts.new((x - tx, y - ty, z))
+                b = bm.verts.new((x + tx, y + ty, z))
+                c = bm.verts.new((x + tx, y + ty, z + bottom))
+                d = bm.verts.new((x - tx, y - ty, z + bottom))
+                try:
+                    face = bm.faces.new((a, b, c, d))
+                    for loop in face.loops:
+                        loop[uv_layer].uv = (0.0, 0.0)
+                    faces += 1
+                except ValueError:
+                    pass
+
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+
+    obj = bpy.data.objects.new("TrackGuardrail", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj, faces
+
+
+#: 橋脚の間隔 [m]。都市高速の高架は 20〜40 m 間隔の径間が多い。
+#: **実測ではなく、その桁として不自然でない値**（憲法ルール1）。
+PIER_SPACING_M = 30.0
+PIER_WIDTH_M = 2.2
+PIER_DEPTH_M = 1.6
+
+#: 遮音壁の高さ [m]（路面から）。**桁の上に立つ。**
+NOISE_WALL_HEIGHT_M = 2.6
+NOISE_WALL_OFFSET_M = 1.2
+
+
+def build_viaduct(points, width_m, ground_level_m, piers=True, wall=True):
+    """高架の橋脚と遮音壁を立てる。
+
+    **「高さがある状態にしてください」への答えがここ。**
+    桁（路面）を持ち上げただけでは、宙に浮いた帯にしか見えない。
+    下に橋脚が立ち、上に壁があって初めて高架に見える。
+    """
+    half = width_m / 2.0
+    mesh = bpy.data.meshes.new("TrackViaduct")
+    bm = bmesh.new()
+    uv_layer = bm.loops.layers.uv.new("UVMap")
+
+    spacing = points[1]["s_m"] - points[0]["s_m"]
+    pier_step = max(int(PIER_SPACING_M / spacing), 1)
+    count = len(points)
+    stats = {"faces": 0}
+
+    def box(cx, cy, z_low, z_high, hx, hy, heading):
+        cos_h, sin_h = math.cos(heading), math.sin(heading)
+
+        def corner(u, v):
+            return (cx + cos_h * u - sin_h * v, cy + sin_h * u + cos_h * v)
+
+        pts = [corner(-hx, -hy), corner(hx, -hy), corner(hx, hy), corner(-hx, hy)]
+        low = [bm.verts.new((x, y, z_low)) for x, y in pts]
+        high = [bm.verts.new((x, y, z_high)) for x, y in pts]
+        for i in range(4):
+            j = (i + 1) % 4
+            try:
+                face = bm.faces.new((low[i], low[j], high[j], high[i]))
+            except ValueError:
+                continue
+            for loop in face.loops:
+                loop[uv_layer].uv = (0.0, 0.0)
+            stats["faces"] += 1
+
+    if piers:
+        for index in range(0, count, pier_step):
+            p = points[index]
+            z = p.get("z_m", 0.0)
+            # **桁の下面まで。** 路面の厚みぶん下げる。
+            box(p["x_m"], p["y_m"], ground_level_m - 1.0, z - ROAD_THICKNESS_M,
+                PIER_DEPTH_M / 2.0, PIER_WIDTH_M / 2.0, p["heading_rad"])
+
+    if wall:
+        for side in (+1.0, -1.0):
+            previous = None
+            for index in range(count + 1):
+                p = points[index % count]
+                heading = p["heading_rad"]
+                z = p.get("z_m", 0.0)
+                nx = -math.sin(heading) * side
+                ny = math.cos(heading) * side
+                lateral = half + NOISE_WALL_OFFSET_M
+                x = p["x_m"] + nx * lateral
+                y = p["y_m"] + ny * lateral
+                current = (bm.verts.new((x, y, z)),
+                           bm.verts.new((x, y, z + NOISE_WALL_HEIGHT_M)),
+                           p["s_m"])
+                if previous is not None:
+                    quad = (previous[0], previous[1], current[1], current[0])
+                    if side < 0.0:
+                        quad = tuple(reversed(quad))
+                    try:
+                        face = bm.faces.new(quad)
+                        for loop in face.loops:
+                            along = (previous[2] if loop.vert in previous[:2]
+                                     else current[2]) / 4.0
+                            high = loop.vert in (previous[1], current[1])
+                            loop[uv_layer].uv = (along, 1.0 if high else 0.0)
+                        stats["faces"] += 1
+                    except ValueError:
+                        pass
+                previous = current
+
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+
+    obj = bpy.data.objects.new("TrackViaduct", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj, stats["faces"]
+
+
+def make_height_lookup(field):
+    """高さ場から (x, y) -> z を引く関数を作る（双一次補間）。
+
+    **樹木も小物もこれで地面に乗せる。** 乗せないと、峠では
+    35 m 埋まるか浮くかする。以前は z=0 固定で、走行面が平らな
+    あいだだけ正しかった。
+    """
+    x0 = field["x0_m"]
+    y0 = field["y0_m"]
+    cell = field["cell_m"]
+    nx = field["nx"]
+    ny = field["ny"]
+    heights = field["heights_m"]
+
+    def lookup(x, y):
+        fx = (x - x0) / cell
+        fy = (y - y0) / cell
+        ix = int(math.floor(fx))
+        iy = int(math.floor(fy))
+        # **端は内側へ寄せる。** 外を引くと IndexError で落ちる。
+        ix = max(0, min(ix, nx - 2))
+        iy = max(0, min(iy, ny - 2))
+        tx = min(max(fx - ix, 0.0), 1.0)
+        ty = min(max(fy - iy, 0.0), 1.0)
+        h00 = heights[iy][ix]
+        h10 = heights[iy][ix + 1]
+        h01 = heights[iy + 1][ix]
+        h11 = heights[iy + 1][ix + 1]
+        return ((h00 * (1.0 - tx) + h10 * tx) * (1.0 - ty)
+                + (h01 * (1.0 - tx) + h11 * tx) * ty)
+
+    return lookup
+
+
+def centreline_sampler_3d(points, stride):
+    """標高つきの間引き中心線。地面の高さを決めるのに使う。"""
+    return [(p["x_m"], p["y_m"], p.get("z_m", 0.0)) for p in points[::stride]]
+
+
 def distance_to_centreline(x, y, samples):
     best = 1e30
     for cx, cy in samples:
@@ -329,12 +691,37 @@ def distance_to_centreline(x, y, samples):
     return math.sqrt(best)
 
 
-def build_ground(points, width_m, shoulder_m):
-    """走行面の外側にだけ起伏を持つ地面を作る。
+def build_ground(points, width_m, shoulder_m, elevation=None, env=None):
+    """地面を作り、同時に**物理が読む高さ場**を返す。
 
-    **走行面（中心線から width/2 + shoulder 以内）は z=0 で完全に平ら。**
-    物理が平面3自由度である以上、ここに凹凸を入れてはいけない。
+    **地面は路面の高さに追従する。**
+
+    以前はコース全体を z=0 の平面にしていた（物理が平面3自由度だった
+    ころの名残）。縦断が入った今それをやると、峠の頂上で車が地面から
+    35 m 浮く。追従させ方は 2 通りあり、コースの性格で使い分ける:
+
+      **地続き**（峠・サーキット）
+        路面が上がれば周りの地面も上がる。コースアウトしても
+        地面は続いている。高さは**近くの中心線の標高を距離で重み付け
+        して平均**する。最近傍の値をそのまま使うと、ヘアピンの内側で
+        高さが不連続になり、崖が立つ。
+
+      **高架**（都市高速）
+        桁が地面から離れて浮いている。周りの地面は下のまま。
+        高さ場は**桁に追従**させ（車は桁の上を走る）、桁の外側では
+        下の地面まで落とす。**落ちるのは正しい挙動**である。
+
+    起伏（丘）は、いずれの場合も「車が到達しうる範囲」の外にだけ乗せる。
     """
+    import numpy as np
+
+    is_viaduct = bool(elevation and elevation.get("is_viaduct"))
+    ground_level_m = float(elevation.get("ground_level_m", 0.0)) if elevation else 0.0
+    # **起伏の大きさはコースごとに違う**（`Tracks/environment.py`）。
+    # 峠は道の両脇が斜面、都市高速はほぼ平ら。
+    amplitude_m = env.relief_amplitude_m if env else RELIEF_AMPLITUDE_M
+    wavelength_m = env.relief_wavelength_m if env else RELIEF_WAVELENGTH_M
+
     xs = [p["x_m"] for p in points]
     ys = [p["y_m"] for p in points]
     x0, x1 = min(xs) - GROUND_MARGIN_M, max(xs) + GROUND_MARGIN_M
@@ -344,55 +731,113 @@ def build_ground(points, width_m, shoulder_m):
     ny = int((y1 - y0) / GROUND_CELL_M) + 1
     log("ground grid %d x %d (%.0f x %.0f m)", nx, ny, x1 - x0, y1 - y0)
 
-    # **起伏の判定は中心線からの距離ではなく、コースの外接矩形からの距離。**
+    grid_x = x0 + np.arange(nx) * GROUND_CELL_M
+    grid_y = y0 + np.arange(ny) * GROUND_CELL_M
+    mesh_x, mesh_y = np.meshgrid(grid_x, grid_y)          # (ny, nx)
+
+    # --- 中心線からの距離と、その付近の路面標高 --------------------------
     #
+    # **numpy で一括に解く。** 素の二重ループだと 82,000 セル x 220 標本で
+    # 分単位になる。
+    stride = max(1, int(round(GROUND_HEIGHT_SAMPLE_M /
+                              max(points[1]["s_m"] - points[0]["s_m"], 1e-6))))
+    samples = centreline_sampler_3d(points, stride)
+    sample_x = np.array([sx for sx, _, _ in samples])
+    sample_y = np.array([sy for _, sy, _ in samples])
+    sample_z = np.array([sz for _, _, sz in samples])
+
+    nearest_d2 = np.full((ny, nx), 1e30)
+    nearest_z = np.zeros((ny, nx))
+    weight_sum = np.zeros((ny, nx))
+    weighted_z = np.zeros((ny, nx))
+
+    # 重みの効く距離 [m]。**これが「近くの中心線」の意味。**
+    falloff2 = GROUND_HEIGHT_BLEND_M * GROUND_HEIGHT_BLEND_M
+
+    for index in range(len(sample_x)):
+        d2 = (mesh_x - sample_x[index]) ** 2 + (mesh_y - sample_y[index]) ** 2
+        closer = d2 < nearest_d2
+        nearest_z = np.where(closer, sample_z[index], nearest_z)
+        nearest_d2 = np.where(closer, d2, nearest_d2)
+        w = 1.0 / (d2 + falloff2)
+        w *= w                                   # 1/(d^2+a)^2。近い点を強く効かせる
+        weight_sum += w
+        weighted_z += w * sample_z[index]
+
+    smooth_z = weighted_z / np.maximum(weight_sum, 1e-30)
+    distance = np.sqrt(nearest_d2)
+
+    # **路面のそばでは「いちばん近い点の標高」をそのまま使う。**
+    #
+    # 重み付き平均だけで作っていたときは、勾配 10% の区間で平均が
+    # 引き戻され、**地面が路面より高くなって路面を埋めた。**
+    # 実際に走らせたら車が草の上を走っていた（路面は地面の下にあった）。
+    #
+    # そして**検査がそれを見逃した。** 「地面が路面に追従しているか」を
+    # 平均値そのものと比べていたので、常に一致していた。
+    # **自分自身と比べる検査は、何も検査していない。**
+    #
+    # 離れたところでは平均に寄せる。最近傍のままだと、ヘアピンの内側
+    # （往路と復路の中間）で標高が不連続になり崖が立つ。
+    corridor = width_m / 2.0 + GROUND_ROAD_CORRIDOR_M
+    blend = np.clip((distance - corridor) / GROUND_ROAD_BLEND_M, 0.0, 1.0)
+    blend = blend * blend * (3.0 - 2.0 * blend)          # smoothstep
+    road_z = nearest_z * (1.0 - blend) + smooth_z * blend
+
+    # --- 起伏の掛かり方 ---------------------------------------------------
+    #
+    # **判定は中心線からの距離ではなくコースの外接矩形からの距離。**
     # 中心線基準だと、コースの内側（インフィールド）や折り返しの内側が
     # 「中心線から遠い」と判定されて起伏が立つ。そこは車がコースアウトで
-    # 到達する場所であり、物理は平面を走り続けるので車が浮く。
+    # 到達する場所である。
     track_x0, track_x1 = min(xs), max(xs)
     track_y0, track_y1 = min(ys), max(ys)
+    outside = np.maximum(
+        np.maximum(track_x0 - mesh_x, np.maximum(0.0, mesh_x - track_x1)),
+        np.maximum(track_y0 - mesh_y, np.maximum(0.0, mesh_y - track_y1)))
 
-    def relief_mask(x, y):
-        """コースの外接矩形からどれだけ外れているかで 0..1 を返す。"""
-        # **矩形距離（max）で測る。** hypot（円形）にすると、矩形で
-        # 検査している「走行しうる範囲」と角で食い違い、角だけ起伏が
-        # 立つ。実際に 0.24 m のずれとして検出された。
-        dx = max(track_x0 - x, 0.0, x - track_x1)
-        dy = max(track_y0 - y, 0.0, y - track_y1)
-        outside = max(dx, dy)
+    t = np.clip((outside - DRIVABLE_FLAT_MARGIN_M) / RELIEF_BLEND_M, 0.0, 1.0)
+    mask = t * t * (3.0 - 2.0 * t)                # smoothstep
 
-        if outside <= DRIVABLE_FLAT_MARGIN_M:
-            return 0.0
-        if outside >= DRIVABLE_FLAT_MARGIN_M + RELIEF_BLEND_M:
-            return 1.0
-        t = (outside - DRIVABLE_FLAT_MARGIN_M) / RELIEF_BLEND_M
-        return t * t * (3.0 - 2.0 * t)     # smoothstep
+    relief = np.zeros((ny, nx))
+    nonzero = mask > 0.0
+    if np.any(nonzero):
+        for iy in range(ny):
+            for ix in range(nx):
+                if not nonzero[iy, ix]:
+                    continue
+                relief[iy, ix] = noise.noise(
+                    Vector((mesh_x[iy, ix] / wavelength_m,
+                            mesh_y[iy, ix] / wavelength_m, 0.0)))
+    relief *= amplitude_m * mask
 
+    if is_viaduct:
+        # 桁の幅。この内側は桁の上（路面と同じ高さ）。
+        deck_half = width_m / 2.0 + VIADUCT_DECK_SHOULDER_M
+        # 桁の外はすぐ下の地面へ落ちる。**なだらかにしない。**
+        # なだらかにすると「高架の縁」に見えず、土手になる。
+        edge = np.clip((distance - deck_half) / VIADUCT_EDGE_DROP_M, 0.0, 1.0)
+        below = ground_level_m + relief
+        heights = road_z * (1.0 - edge) + below * edge - GROUND_SINK_M
+        # 見た目の地面は**下だけ**（桁は路面メッシュが担当する）。
+        visual = below - GROUND_SINK_M
+    else:
+        heights = road_z + relief - GROUND_SINK_M
+        visual = heights
+
+    # --- メッシュ ---------------------------------------------------------
     mesh = bpy.data.meshes.new("TrackGround")
     bm = bmesh.new()
     uv_layer = bm.loops.layers.uv.new("UVMap")
 
     grid = []
-    heights = []
     for iy in range(ny):
         row = []
-        height_row = []
-        y = y0 + iy * GROUND_CELL_M
         for ix in range(nx):
-            x = x0 + ix * GROUND_CELL_M
-            mask = relief_mask(x, y)
-
-            if mask <= 0.0:
-                z = -GROUND_SINK_M
-            else:
-                n = noise.noise(Vector((x / RELIEF_WAVELENGTH_M,
-                                        y / RELIEF_WAVELENGTH_M, 0.0)))
-                z = -GROUND_SINK_M + n * RELIEF_AMPLITUDE_M * mask
-
-            row.append(bm.verts.new((x, y, z)))
-            height_row.append(z)
+            row.append(bm.verts.new((float(mesh_x[iy, ix]),
+                                     float(mesh_y[iy, ix]),
+                                     float(visual[iy, ix]))))
         grid.append(row)
-        heights.append(height_row)
 
     bm.verts.ensure_lookup_table()
 
@@ -400,7 +845,6 @@ def build_ground(points, width_m, shoulder_m):
     #
     # **10 m にすると格子模様として見える。** 地面は 1,374 x 950 m あり、
     # 10 m 周期だと 137 回繰り返す。俯瞰したときに市松模様になった。
-    # 周期を伸ばすと近くでぼやけるが、繰り返しが目立つほうが不自然。
     ground_uv_scale = 1.0 / 26.0
     for iy in range(ny - 1):
         for ix in range(nx - 1):
@@ -423,60 +867,123 @@ def build_ground(points, width_m, shoulder_m):
 
     # **高さ場を一緒に返す。** 物理側はこれを読んで接地を計算する。
     # 描画メッシュを物理へ流用しない（憲法ルール4）ための唯一の情報源。
+    #
+    # 高架では**見た目の地面と高さ場が違う**（前者は下、後者は桁）。
+    # これは食い違いではなく、そもそも別のものである。桁は路面メッシュ
+    # として別に立ち、車はその上を走る。
     heightfield = {
         "x0_m": x0, "y0_m": y0,
         "cell_m": GROUND_CELL_M,
         "nx": nx, "ny": ny,
-        "heights_m": heights,
+        "heights_m": [[float(v) for v in heights[iy]] for iy in range(ny)],
     }
-    return obj, (x0, x1, y0, y1), heightfield
+
+    # --- 検査値 -----------------------------------------------------------
+    #
+    # **「走行しうる範囲の地面が平らか」は、もう平らでは測れない。**
+    # 代わりに「路面の高さに追従しているか」を測る。追従していなければ、
+    # 車が地面から浮くか埋まる（以前は丘の上を宙に浮いて走っていた）。
+    # **比べる相手は「いちばん近い中心線の標高」。**
+    #
+    # ここを road_z（自分が作った値）と比べていたときは、常に一致して
+    # 検査が素通りした。比べるべきは**元の設計値**である。
+    inside_box = outside <= DRIVABLE_FLAT_MARGIN_M
+    if is_viaduct:
+        # 高架は桁の上だけを見る。**桁の外は落ちるのが正しい。**
+        region = inside_box & (distance <= width_m / 2.0 + VIADUCT_DECK_SHOULDER_M)
+    else:
+        # 路面とその周り。**ここで路面が埋まっていないことが要点。**
+        region = inside_box & (distance <= corridor)
+
+    target = nearest_z - GROUND_SINK_M
+    if np.any(region):
+        follow_error = float(np.max(np.abs(heights - target)[region]))
+        # **地面が路面より高くなっていないか**を別に見る。追従の誤差が
+        # 小さくても、符号が一方に偏っていれば路面は埋まる。
+        above = float(np.max((heights - nearest_z)[region]))
+    else:
+        follow_error = 0.0
+        above = 0.0
+    checked = int(np.count_nonzero(region))
+
+    # 見た目の地面の高さ場。**樹木と小物はこちらに乗せる**（描かれる物
+    # なので、描かれる地面に合わせる）。地続きのコースでは物理の高さ場と
+    # 同じ値だが、高架では違う（物理は桁、見た目は下の地面）。
+    visual_field = {
+        "x0_m": x0, "y0_m": y0,
+        "cell_m": GROUND_CELL_M,
+        "nx": nx, "ny": ny,
+        "heights_m": [[float(v) for v in visual[iy]] for iy in range(ny)],
+    }
+
+    checks = {
+        "visual_field": visual_field,
+        "above_road_m": above,
+        "follow_error_m": follow_error,
+        "checked_cells": checked,
+        "is_viaduct": is_viaduct,
+        "min_height_m": float(np.min(heights)),
+        "max_height_m": float(np.max(heights)),
+    }
+    return obj, (x0, x1, y0, y1), heightfield, checks
 
 
-def plan_trees(points, width_m, offsets, species_list):
-    """中心線に沿って樹木の配置を決める。
+def plan_trees(points, width_m, layers, height_at=None):
+    """中心線に沿って樹木の配置を決める。**層ごとに撒く。**
+
+    層を分けるのが要点である。1 種類を 1 つの間隔で撒くと、本数を
+    どれだけ増やしても「同じ木の並木」にしかならない。高木・広葉樹・
+    下草・立ち枯れを別の層として重ねると、密度も背丈もばらける。
+    どの層をどれだけ撒くかは `Tracks/environment.py` が持つ。
 
     **路面から離す。** 物理に衝突判定が無いため、木に突っ込むと
     すり抜ける。近くに置くほどその絵が出やすくなる。
     """
-    rng = random.Random(RANDOM_SEED)
-    min_offset, max_offset = offsets
     samples = centreline_sampler(points, 5)
-
     spacing = points[1]["s_m"] - points[0]["s_m"]
-    step = max(int(TREE_SPACING_M / spacing), 1)
 
     placements = []
-    for index in range(0, len(points), step):
-        p = points[index]
-        heading = p["heading_rad"]
-        nx = -math.sin(heading)
-        ny = math.cos(heading)
+    for layer_index, layer in enumerate(layers):
+        # **層ごとに種を変える。** 同じ種だと、間隔の違う層でも
+        # 同じ乱数列を使ってしまい、木が同じ場所に重なって生える。
+        rng = random.Random(RANDOM_SEED + layer_index * 977)
+        min_offset, max_offset = layer.offset_m
+        step = max(int(layer.spacing_m / spacing), 1)
+        scale_low, scale_high = layer.scale
 
-        for side in (+1.0, -1.0):
-            species = rng.choice(species_list)
-            offset = rng.uniform(min_offset, max_offset)
-            jitter = rng.uniform(-TREE_SPACING_M * 0.4, TREE_SPACING_M * 0.4)
-            x = p["x_m"] + nx * offset * side + math.cos(heading) * jitter
-            y = p["y_m"] + ny * offset * side + math.sin(heading) * jitter
+        for index in range(0, len(points), step):
+            p = points[index]
+            heading = p["heading_rad"]
+            nx = -math.sin(heading)
+            ny = math.cos(heading)
 
-            # **他の区間の路面に近すぎないか必ず見る。**
-            # ヘアピンやS字では中心線が折り返すので、「自分の断面から
-            # 18 m 外側」でも別区間の路面上ということが起こる。
-            if distance_to_centreline(x, y, samples) < min_offset:
-                continue
+            for side in (+1.0, -1.0):
+                species = rng.choice(layer.species)
+                offset = rng.uniform(min_offset, max_offset)
+                jitter = rng.uniform(-layer.spacing_m * 0.45,
+                                     layer.spacing_m * 0.45)
+                x = p["x_m"] + nx * offset * side + math.cos(heading) * jitter
+                y = p["y_m"] + ny * offset * side + math.sin(heading) * jitter
 
-            placements.append({
-                "species": species,
-                "x_m": x,
-                "y_m": y,
-                "z_m": 0.0,
-                "yaw_rad": rng.uniform(0.0, 2.0 * math.pi),
-                # **PolyHaven の樹木は sapling（若木）で 1〜3 m しかない。**
-                # 等倍だと並木ではなく下草に見える。切株以外は拡大する。
-                # 実寸から離れるが、**これは景観であって計測対象ではない。**
-                "scale": (rng.uniform(0.8, 1.4) if species == "tree_stump_01"
-                          else rng.uniform(1.9, 3.4)),
-            })
+                # **他の区間の路面に近すぎないか必ず見る。**
+                # ヘアピンやS字では中心線が折り返すので、「自分の断面から
+                # 13 m 外側」でも別区間の路面上ということが起こる。
+                if distance_to_centreline(x, y, samples) < min_offset:
+                    continue
+
+                placements.append({
+                    "species": species,
+                    "x_m": x,
+                    "y_m": y,
+                    "z_m": height_at(x, y) if height_at else 0.0,
+                    "yaw_rad": rng.uniform(0.0, 2.0 * math.pi),
+                    # **PolyHaven の樹木は sapling（若木）で実寸 1〜3 m
+                    # しかない。** 等倍だと並木ではなく下草に見えるので
+                    # 拡大している。実寸から離れるが、これは景観であって
+                    # 計測対象ではない（憲法ルール18）。
+                    # **大きい木の実物が手に入ったら拡大をやめること。**
+                    "scale": rng.uniform(scale_low, scale_high),
+                })
     return placements
 
 
@@ -528,7 +1035,8 @@ CONE_MIN_CLEARANCE_M = 1.0
 TYRE_WALL_CURVATURE = 1.0 / 60.0
 
 
-def plan_props(points, width_m, species_list):
+def plan_props(points, width_m, species_list, height_at=None,
+               plan=None):
     """コース周りの物を置く。
 
     **樹木と同じ規則を守る。** 路面から離し、他区間の路面に近すぎたら
@@ -539,6 +1047,10 @@ def plan_props(points, width_m, species_list):
     samples = centreline_sampler(points, 5)
     spacing = points[1]["s_m"] - points[0]["s_m"]
     half = width_m / 2.0
+    # **置く物の一覧はコースごとに違う**（`Tracks/environment.py`）。
+    # 共通の PROP_PLAN しか無かったころ、4コースとも同じバリアが
+    # 同じ距離に並んでいた。
+    plan = PROP_PLAN if plan is None else plan
 
     # パイロンを置くコーナー後半の点。**縁石と同じ判定を使う**
     # （`Tracks/kerb.py`）。別の閾値にすると「縁石があるのにパイロンが
@@ -554,7 +1066,7 @@ def plan_props(points, width_m, species_list):
     fine_samples = centreline_sampler(points, 1)
 
     placements = []
-    for kind, offset_m, gap_m, scale_range, mode in PROP_PLAN:
+    for kind, offset_m, gap_m, scale_range, mode in plan:
         if kind not in species_list:
             # **黙って飛ばさない**（憲法ルール6）。取り込み忘れに気づけない。
             log("!! アセットが無いので置けない: %s", kind)
@@ -626,7 +1138,9 @@ def plan_props(points, width_m, species_list):
                         "kind": kind,
                         "x_m": x,
                         "y_m": y,
-                        "z_m": height,
+                        # **地面に乗せる。** height は路面からの持ち上げ量
+                        # （タイヤバリアの段など）で、地面の標高とは別。
+                        "z_m": (height_at(x, y) if height_at else 0.0) + height,
                         "yaw_rad": yaw,
                         "scale": rng.uniform(low, high),
                     })
@@ -667,6 +1181,19 @@ def main():
     width_m = track["width_m"]
     shoulder_m = track["shoulder_m"]
 
+    # **コースごとの環境**（`Tracks/environment.py`）。
+    #
+    # 樹木の密度も、置く物も、起伏の大きさも、ここから来る。
+    # 共通の定数しか無かったころ、4コースとも同じ木が同じ間隔で並び、
+    # 同じバリアが同じ距離に並んでいた。**線形だけが違う4本**だった。
+    #
+    # コース名は出力先の名前から取る（`Tracks/Export/<key>/`）。
+    track_key = os.path.basename(os.path.normpath(out_dir))
+    env = environment_for(track_key)
+    log("環境: %s（樹木 %d 層 / 物 %d 種 / 遠景 %s）", track_key,
+        len(env.tree_layers), len(env.props),
+        "あり" if env.distant else "なし")
+
     started = time.time()
     clear_scene()
 
@@ -683,77 +1210,151 @@ def main():
         return 1
     log("kerb: %d 区間 / %d 面", len(kerb_spans_used), kerb_faces)
 
-    ground, extent, heightfield = build_ground(points, width_m, shoulder_m)
+    elevation = track.get("elevation")
+    ground, extent, heightfield, ground_checks = build_ground(
+        points, width_m, shoulder_m, elevation, env)
     log("ground: %d 面 (%.1fs)", len(ground.data.polygons), time.time() - started)
 
-    # 走行面が本当に平らかを確認する。**目視ではなく数値で。**
+    # 走行面が**縦断のとおりの高さ**にあるかを確認する。目視ではなく数値で。
     #
-    # 厚みを付けたので、頂点は上面（z=0）か下面（z=-ROAD_THICKNESS_M）の
-    # どちらかになる。**その2つ以外が現れたら、走行面が傾いている。**
-    top = 0
-    bottom = 0
-    worst_top = 0.0
-    for vert in road.data.vertices:
-        z = vert.co.z
-        if abs(z) < 1e-9:
-            top += 1
-        elif abs(z + ROAD_THICKNESS_M) < 1e-9:
-            bottom += 1
-        else:
-            log("!! 路面に上面でも下面でもない頂点がある (z = %.6f)", z)
-            return 1
-        if abs(z) < ROAD_THICKNESS_M / 2.0:
-            worst_top = max(worst_top, abs(z))
+    # 以前ここは「路面は z=0 の平面か」を見ていた。縦断が入った今、
+    # それでは通らない。見るべきことは変わっていない——
+    # **路面の高さが、物理が読む値と一致しているか**である。
+    # 一致していなければ、車は地面から浮くか埋まる。
+    #
+    # 頂点は上面（中心線の z）か下面（その ROAD_THICKNESS_M 下）の
+    # どちらかにしかならない。**それ以外が出たら座標変換が壊れている。**
+    allowed = set()
+    for p in points:
+        z = round(p.get("z_m", 0.0), 6)
+        allowed.add(z)
+        allowed.add(round(z - ROAD_THICKNESS_M, 6))
+    allowed_sorted = sorted(allowed)
 
-    if top == 0:
-        log("!! 路面に上面の頂点が無い")
+    def nearest_allowed(z):
+        best = min(allowed_sorted, key=lambda a: abs(a - z))
+        return abs(best - z)
+
+    # **許容は 1 mm。** Blender の頂点は float32 なので、標高 35 m では
+    # 刻みそのものが 2e-6 m ある。1e-6 で見ると「正しいのに落ちる」。
+    # 1 mm は物理的に意味のある量より 2 桁小さく、壊れ方（数 cm 以上の
+    # ずれ）とは 1 桁以上離れている。
+    MESH_TOLERANCE_M = 1e-3
+
+    worst_road = 0.0
+    for vert in road.data.vertices:
+        worst_road = max(worst_road, nearest_allowed(round(vert.co.z, 6)))
+    if worst_road > MESH_TOLERANCE_M:
+        log("!! 路面に縦断と合わない頂点がある (ずれ %.6f m)", worst_road)
         return 1
-    log("路面の平坦性 OK (上面 %d 頂点 max |z| = %.2e / 下面 %d 頂点、厚み %.3f m)",
-        top, worst_top, bottom, ROAD_THICKNESS_M)
+
+    road_z_values = [p.get("z_m", 0.0) for p in points]
+    log("路面の縦断 OK (%d 頂点、ずれ %.2e m / 標高 %.2f 〜 %.2f m)",
+        len(road.data.vertices), worst_road,
+        min(road_z_values), max(road_z_values))
 
     # 縁石の高さが断面どおりかを確認する。**目視ではなく数値で。**
     #
     # 断面は 4 点しか無いので、頂点の z はその 4 値のいずれかにしかならない。
     # **それ以外が出たら、断面か座標変換が壊れている。**
-    allowed_z = sorted({z for _, z in KERB_PROFILE})
+    # **断面は路面からの相対で見る。** 縦断が入ったので絶対の z では測れない。
+    kerb_allowed = set()
+    for p in points:
+        base = p.get("z_m", 0.0)
+        for _, dz in KERB_PROFILE:
+            kerb_allowed.add(round(base + dz, 6))
+    kerb_sorted = sorted(kerb_allowed)
+    worst_kerb = 0.0
     for vert in kerb.data.vertices:
-        if not any(abs(vert.co.z - z) < 1e-9 for z in allowed_z):
-            log("!! 縁石に断面外の頂点がある (z = %.6f)", vert.co.z)
-            return 1
-    log("縁石の断面 OK (%d 頂点、高さ %.3f m / 幅 %.2f m)",
-        len(kerb.data.vertices), KERB_HEIGHT_M, KERB_WIDTH_M)
-
-    # **車が到達しうる範囲の地面も平らかを確認する。**
-    #
-    # 物理は z=0 の平面を走り続けるので、走行しうる場所に起伏があると
-    # 車が地面から浮く／埋まる。以前これを見落として、コースアウトすると
-    # 丘の上を宙に浮いて走る状態になった。**目視ではなく数値で止める。**
-    xs_t = [p["x_m"] for p in points]
-    ys_t = [p["y_m"] for p in points]
-    tx0, tx1 = min(xs_t) - DRIVABLE_FLAT_MARGIN_M, max(xs_t) + DRIVABLE_FLAT_MARGIN_M
-    ty0, ty1 = min(ys_t) - DRIVABLE_FLAT_MARGIN_M, max(ys_t) + DRIVABLE_FLAT_MARGIN_M
-
-    worst = 0.0
-    checked = 0
-    for vert in ground.data.vertices:
-        x, y, z = vert.co
-        if tx0 <= x <= tx1 and ty0 <= y <= ty1:
-            checked += 1
-            worst = max(worst, abs(z + GROUND_SINK_M))
-
-    if worst > 1e-9:
-        log("!! 走行しうる範囲の地面が平らでない (max ずれ %.6f m)", worst)
+        z = round(vert.co.z, 6)
+        worst_kerb = max(worst_kerb,
+                         min(abs(a - z) for a in kerb_sorted))
+    if worst_kerb > MESH_TOLERANCE_M:
+        log("!! 縁石に断面外の頂点がある (ずれ %.6f m)", worst_kerb)
         return 1
-    log("走行域の地面の平坦性 OK (%d 頂点、max ずれ %.2e m)", checked, worst)
+    log("縁石の断面 OK (%d 頂点、高さ %.3f m / 幅 %.2f m、ずれ %.2e m)",
+        len(kerb.data.vertices), KERB_HEIGHT_M, KERB_WIDTH_M, worst_kerb)
 
-    species = ["pine_sapling_small", "fir_sapling", "searsia_lucida",
-               "othonna_cerarioides", "tree_stump_01"]
-    trees = plan_trees(points, width_m, track["tree_offset_m"], species)
-    log("trees: %d 本", len(trees))
+    # **車が到達しうる範囲の地面が、路面の高さに追従しているかを確認する。**
+    #
+    # 以前ここは「その範囲の地面が z=0 で平らか」を見ていた。縦断が
+    # 入った今、平らであってはいけない——峠の頂上では地面も 35 m
+    # 上がっていなければならない。**見るべきことは変わっていない**:
+    # 車が到達する場所で、地面が路面の高さから離れていないこと。
+    # 離れていれば、コースアウトした車が宙に浮くか地面に埋まる。
+    #
+    # 高架では「桁の上」だけを見る。**桁の外で落ちるのは正しい挙動**で、
+    # そこを平らにすると高架が土手になる。
+    tolerance = 1e-6
+    if ground_checks["follow_error_m"] > tolerance:
+        log("!! 走行しうる範囲の地面が路面に追従していない (max ずれ %.6f m)",
+            ground_checks["follow_error_m"])
+        return 1
+    # **地面が路面より高いと、路面が地面に埋まって見えなくなる。**
+    # 実際にそうなり、車が草の上を走っていた（路面は下にあった）。
+    if ground_checks["above_road_m"] > -GROUND_SINK_M / 2.0:
+        log("!! 地面が路面より高い (最大 %.3f m)。路面が埋まる",
+            ground_checks["above_road_m"])
+        return 1
+    log("地面の追従 OK (%s / %d セル、max ずれ %.2e m、標高 %.1f 〜 %.1f m)",
+        "高架（桁の上）" if ground_checks["is_viaduct"] else "地続き",
+        ground_checks["checked_cells"], ground_checks["follow_error_m"],
+        ground_checks["min_height_m"], ground_checks["max_height_m"])
+
+    # --- 道路構造（手続きで作るもの）-------------------------------------
+    #
+    # **これらは「飾り」ではなく道路構造の一部である。** 路面の形が
+    # 決まれば形も決まるので、外から持ってくるモデルを並べるより
+    # 中心線から生成するほうが確実に沿う。
+    # 建物・標識・樹木のような「置く物」は外部の CC0 アセットを使う
+    # （ユーザーの方針。`Docs/PHASE15_DATA_LICENCE.md` §6）。
+    extras = []
+
+    if env.distant is not None:
+        base_z = (elevation.get("ground_level_m", 0.0)
+                  if elevation and elevation.get("is_viaduct")
+                  else min(p.get("z_m", 0.0) for p in points))
+        distant_obj, distant_faces = build_distant_terrain(
+            points, extent, env.distant, base_z)
+        if distant_faces == 0:
+            log("!! 遠景が 1 面も出来なかった")
+            return 1
+        extras.append(distant_obj)
+        log("distant: %d 面（振幅 %.0f m / 到達 %.0f m / %d 重）",
+            distant_faces, env.distant.amplitude_m, env.distant.reach_m,
+            env.distant.ridges)
+
+    if env.guardrail:
+        rail, rail_faces = build_guardrail(points, width_m)
+        if rail_faces == 0:
+            log("!! ガードレールが 1 面も出来なかった")
+            return 1
+        extras.append(rail)
+        log("guardrail: %d 面（高さ %.2f m）", rail_faces, GUARDRAIL_HEIGHT_M)
+
+    if env.viaduct_piers or env.noise_wall:
+        viaduct, viaduct_faces = build_viaduct(
+            points, width_m,
+            elevation.get("ground_level_m", 0.0) if elevation else 0.0,
+            piers=env.viaduct_piers, wall=env.noise_wall)
+        if viaduct_faces == 0:
+            log("!! 高架の橋脚・遮音壁が 1 面も出来なかった")
+            return 1
+        extras.append(viaduct)
+        log("viaduct: %d 面（橋脚 %s / 遮音壁 %s）", viaduct_faces,
+            "あり" if env.viaduct_piers else "なし",
+            "あり" if env.noise_wall else "なし")
+
+    ground_height_at = make_height_lookup(ground_checks["visual_field"])
+    species = all_species(env)
+    trees = plan_trees(points, width_m, env.tree_layers, ground_height_at)
+    log("trees: %d 本（%d 層 / %d 種）",
+        len(trees), len(env.tree_layers), len(species))
 
     # **コース周りの物。** 自分でモデリングせず CC0 のアセットを置く。
-    prop_kinds = [entry[0] for entry in PROP_PLAN]
-    props = plan_props(points, width_m, prop_kinds)
+    prop_kinds = all_prop_kinds(env)
+    props = plan_props(points, width_m, prop_kinds, ground_height_at,
+                       env.props)
     prop_counts = {}
     for prop in props:
         prop_counts[prop["kind"]] = prop_counts.get(prop["kind"], 0) + 1
@@ -771,6 +1372,17 @@ def main():
     export_fbx([kerb], os.path.join(out_dir, "TrackKerb.fbx"))
     export_fbx([ground], os.path.join(out_dir, "TrackGround.fbx"))
 
+    # **道路構造は 1 つずつ別の FBX に出す。**
+    #
+    # まとめると UE 側でマテリアルを分けられない。遠景の山と
+    # ガードレールと橋脚は、どれも見た目がまったく違う。
+    extra_files = {}
+    for obj in extras:
+        name = obj.name                       # TrackDistant / TrackGuardrail / ...
+        path = os.path.join(out_dir, name + ".fbx")
+        export_fbx([obj], path)
+        extra_files[name] = name + ".fbx"
+
     placement = {
         "_meta": {
             "generator": "Blender/build_track.py",
@@ -783,6 +1395,8 @@ def main():
         "road_fbx": "TrackRoad.fbx",
         "kerb_fbx": "TrackKerb.fbx",
         "ground_fbx": "TrackGround.fbx",
+        # 遠景・ガードレール・高架。**あるものだけ載る。**
+        "structure_fbx": extra_files,
         "kerb_spans": len(kerb_spans_used),
         "species": species,
         "trees": trees,

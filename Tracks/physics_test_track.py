@@ -28,6 +28,16 @@ class TrackPoint:
     heading_rad: float
     curvature_1pm: float  # 曲率 [1/m]。左旋回が正
     label: str = ""
+    z_m: float = 0.0
+    """標高 [m]。**既定は 0。**
+
+    縦断は `Tracks/elevation.py` が持ち、`track_catalogue.build()` が
+    ここへ入れる。**線形（平面形）と縦断を別々に持つのは意図的**で、
+    閉合を解くのは平面形の話、勾配を守るのは縦断の話であり、
+    条件がまったく違う。
+    """
+    gradient_pct: float = 0.0
+    """その地点の勾配 [%]（上りが正）。**描画と検査のために持ち回る。**"""
 
 
 class Track:
