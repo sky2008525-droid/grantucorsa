@@ -81,6 +81,23 @@ export MSYS2_ARG_CONV_EXCL="*"
     -archivedirectory="$(cygpath -w "$ARCHIVE" 2>/dev/null || echo "$ARCHIVE")" \
     -utf8output
 
+# --- 3. 実データをパッケージへ入れる ---------------------------------------
+#
+# **DefaultGame.ini の DirectoriesToAlwaysStageAsNonUFS だけでは入らなかった。**
+# 設定は書いてあるのに staging されず、出来上がった exe は vehicle.json を
+# 読めなかった（車が 1 mm も動かない）。UE 側の staging を当てにせず、
+# ここで明示的に置く。**確認までがこの script の仕事。**
+STAGED="$ARCHIVE/Windows/ZN6DigitalTwin/ZN6Data"
+rm -rf "$STAGED"
+mkdir -p "$(dirname "$STAGED")"
+cp -r "$DATA" "$STAGED"
+
+if [ ! -f "$STAGED/Vehicles/ZN6/vehicle.json" ]; then
+    echo "ERROR  同梱に失敗した: $STAGED" >&2
+    exit 1
+fi
+echo "  同梱を確認: $(find "$STAGED" -name '*.json' | wc -l) 個の JSON"
+
 echo
 echo "完了。起動:"
 echo "  $ARCHIVE/Windows/ZN6DigitalTwin.exe"
