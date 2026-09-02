@@ -60,6 +60,8 @@ from kerb import (KERB_HEIGHT_M, KERB_RISE_M, KERB_TILE_LENGTH_M,  # noqa: E402
                   KERB_WIDTH_M, corner_exit_indices, kerb_spans)
 from environment import (all_prop_kinds, all_species,  # noqa: E402
                          environment_for)
+from pit import (PIT_LANE_WIDTH_M, PIT_WALL_HEIGHT_M,  # noqa: E402
+                 PIT_WALL_THICKNESS_M, garage_positions, plan_pit_lane)
 
 # 路面の外側に付ける起伏の大きさ [m] と横方向の波長 [m]。
 # **控えめにする。** 平坦な走行面から急に山が立ち上がると不自然。
@@ -641,6 +643,92 @@ def build_viaduct(points, width_m, ground_level_m, piers=True, wall=True):
     obj = bpy.data.objects.new("TrackViaduct", mesh)
     bpy.context.scene.collection.objects.link(obj)
     return obj, stats["faces"]
+
+
+def build_pit(points, lane):
+    """ピットレーンとピットウォールを作る。
+
+    **ピットレーンは道路である。** コースの形が決まれば形が決まるので、
+    外から持ってくるモデルより中心線から作るほうが確実に沿う
+    （建屋は外部アセット。`Tracks/environment.py` の pit_building）。
+
+    どこに引くかは `Tracks/pit.py` が決める。
+    """
+    mesh = bpy.data.meshes.new("TrackPit")
+    bm = bmesh.new()
+    uv_layer = bm.loops.layers.uv.new("UVMap")
+
+    faces = 0
+    rows = []
+    for position, index in enumerate(lane.indices):
+        p = points[index]
+        heading = p["heading_rad"]
+        z = p.get("z_m", 0.0)
+        nx = -math.sin(heading) * lane.side
+        ny = math.cos(heading) * lane.side
+
+        centre = lane.offset_at(position)
+        inner = centre - PIT_LANE_WIDTH_M / 2.0
+        outer = centre + PIT_LANE_WIDTH_M / 2.0
+
+        def at(lateral, height):
+            return bm.verts.new((p["x_m"] + nx * lateral,
+                                 p["y_m"] + ny * lateral, z + height))
+
+        rows.append({
+            "lane_in": at(inner, 0.0),
+            "lane_out": at(outer, 0.0),
+            "wall_low": at(inner - PIT_WALL_THICKNESS_M, 0.0),
+            "wall_high": at(inner - PIT_WALL_THICKNESS_M, PIT_WALL_HEIGHT_M),
+            "wall_top_in": at(inner, PIT_WALL_HEIGHT_M),
+            "s": p["s_m"],
+        })
+
+    bm.verts.ensure_lookup_table()
+
+    for i in range(len(rows) - 1):
+        a, b = rows[i], rows[i + 1]
+        va = a["s"] / ROAD_UV_REPEAT_M
+        vb = b["s"] / ROAD_UV_REPEAT_M
+
+        # 舗装面
+        quad = (a["lane_in"], a["lane_out"], b["lane_out"], b["lane_in"])
+        if lane.side < 0.0:
+            quad = tuple(reversed(quad))
+        try:
+            face = bm.faces.new(quad)
+            for loop in face.loops:
+                on_out = loop.vert in (a["lane_out"], b["lane_out"])
+                first = loop.vert in (a["lane_in"], a["lane_out"])
+                loop[uv_layer].uv = (
+                    (PIT_LANE_WIDTH_M / 2.0 if on_out else
+                     -PIT_LANE_WIDTH_M / 2.0) / ROAD_UV_REPEAT_M,
+                    va if first else vb)
+            faces += 1
+        except ValueError:
+            pass
+
+        # ピットウォール（本線側の面と天端）
+        for pair, other in ((("wall_low", "wall_high"), False),
+                            (("wall_high", "wall_top_in"), True)):
+            quad = (a[pair[0]], a[pair[1]], b[pair[1]], b[pair[0]])
+            if lane.side < 0.0:
+                quad = tuple(reversed(quad))
+            try:
+                face = bm.faces.new(quad)
+                for loop in face.loops:
+                    loop[uv_layer].uv = (0.0 if other else 1.0, 0.0)
+                faces += 1
+            except ValueError:
+                pass
+
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+
+    obj = bpy.data.objects.new("TrackPit", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj, faces
 
 
 def make_height_lookup(field):
@@ -1332,6 +1420,26 @@ def main():
         extras.append(rail)
         log("guardrail: %d 面（高さ %.2f m）", rail_faces, GUARDRAIL_HEIGHT_M)
 
+    # **ピット。** 直線が短いコースには作らない（幅 9 m の峠に
+    # ピットレーンがあったらおかしい）。
+    garages = []
+    if env.pit_building:
+        lane = plan_pit_lane(points, spacing_m)
+        if lane is None:
+            log("pit: 直線が短いので作らない")
+        else:
+            pit, pit_faces = build_pit(points, lane)
+            if pit_faces == 0:
+                log("!! ピットレーンが 1 面も出来なかった")
+                return 1
+            extras.append(pit)
+            garages = garage_positions(lane, points, spacing_m)
+            for garage in garages:
+                garage["kind"] = env.pit_building
+                garage["scale"] = 1.0
+            log("pit: %d 面（レーン %.0f m / 建屋 %d 棟）",
+                pit_faces, lane.length_m * spacing_m, len(garages))
+
     if env.viaduct_piers or env.noise_wall:
         viaduct, viaduct_faces = build_viaduct(
             points, width_m,
@@ -1355,6 +1463,9 @@ def main():
     prop_kinds = all_prop_kinds(env)
     props = plan_props(points, width_m, prop_kinds, ground_height_at,
                        env.props)
+    # **ピットの建屋は plan_props を通さない。** 置く場所が
+    # 「中心線から何 m」ではなくピットレーンの外側と決まっているため。
+    props += garages
     prop_counts = {}
     for prop in props:
         prop_counts[prop["kind"]] = prop_counts.get(prop["kind"], 0) + 1

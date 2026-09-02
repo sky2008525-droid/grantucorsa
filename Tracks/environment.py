@@ -121,6 +121,13 @@ class Environment:
     #: 遮音壁を立てるか（高架）。
     noise_wall: bool = False
 
+    #: ピットの建屋に使うアセット名。`None` ならピットを作らない。
+    #:
+    #: **レーンと壁は手続きで作り、建屋だけ外部アセットを置く。**
+    #: レーンは道路（コースの形で決まる）、建屋は建築物（決まらない）
+    #: という違いによる。
+    pit_building: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # 置く物の共通部品
@@ -139,6 +146,34 @@ class Environment:
 _CONES = ("traffic_cone", 1.8, 7.0, (1.0, 1.0), "corner_exit")
 
 
+# **実寸の大きい樹木が入った**（2026-09-02）。
+#
+# それまでは sapling（若木、実寸 1〜3 m）しか無く、3 倍前後に拡大して
+# 大木のふりをしていた。拡大した若木は枝ぶりも葉の大きさも若木のままで、
+# 「大きい下草」にしか見えない。実寸で 9〜20 m のものが入ったので、
+# **拡大をやめて等倍前後で使う。**
+#
+#   fir_tree_01           14.5 m  モミ（針葉樹）
+#   jacaranda_tree        19.5 m  広葉樹。**花が紫**なので日本の山には使わない
+#   pine_sapling_medium   11.5 m  マツ
+#   fir_sapling_medium     8.9 m  モミ（小）
+#   island_tree_01         5.0 m  広葉樹（小）
+#   tree_small_02          4.6 m  広葉樹（小）
+#   island_tree_02         3.4 m  低木
+#
+# **日本の樹種そのものは手に入っていない。** 杉も檜も無い。
+# 針葉樹として形の近いモミ・マツで代える（憲法ルール18: 演出）。
+
+_CONIFERS = ["fir_tree_01", "pine_sapling_medium", "fir_sapling_medium"]
+_BROADLEAF = ["island_tree_01", "tree_small_02", "searsia_burchellii"]
+_UNDERGROWTH = ["fern_02", "grass_medium_01", "grass_medium_02",
+                "nettle_plant", "periwinkle_plant", "weed_plant_02",
+                "celandine_01", "shrub_01", "shrub_03", "shrub_04"]
+_DEADWOOD = ["dead_quiver_trunk", "dead_tree_trunk_02", "dead_tree_trunk",
+             "dry_branches_medium_01", "tree_stump_01", "tree_stump_02",
+             "root_cluster_01", "pine_roots"]
+
+
 ENVIRONMENTS: Dict[str, Environment] = {
     # -----------------------------------------------------------------
     # 物理の基準コース。**平坦なテストコース。**
@@ -152,10 +187,11 @@ ENVIRONMENTS: Dict[str, Environment] = {
         distant=None,
         tree_layers=[
             TreeLayer(
-                species=["pine_sapling_small", "fir_sapling", "searsia_lucida",
-                         "othonna_cerarioides", "tree_stump_01"],
+                species=["pine_sapling_small", "fir_sapling",
+                         "searsia_lucida", "othonna_cerarioides"],
                 spacing_m=4.0,
                 offset_m=(18.0, 70.0),
+                scale=(1.9, 3.4),
             ),
         ],
         props=[
@@ -173,9 +209,10 @@ ENVIRONMENTS: Dict[str, Environment] = {
     # -----------------------------------------------------------------
     # 常設サーキット。
     #
-    # **ピットもスタンドもまだ無い。** 箱物のアセットが要る
-    # （`Docs/PHASE15_DATA_LICENCE.md` §6 に何が足りないかを書く）。
-    # 今あるもので出来るのは、タイヤバリア・フェンス・広い緑地まで。
+    # **ピットもスタンドもまだ無い。** 箱物のアセットが足りない。
+    # 今あるもので出来るのは、タイヤバリア・フェンス・広い緑地・
+    # 資材置き場まで。**「ピットくらいはある」という指摘には
+    # まだ答えられていない。**
     # -----------------------------------------------------------------
     "technical_circuit": Environment(
         relief_amplitude_m=9.0,
@@ -185,10 +222,17 @@ ENVIRONMENTS: Dict[str, Environment] = {
         tree_layers=[
             # **コース際には木を置かない。** サーキットは見通しを取る。
             TreeLayer(
-                species=["searsia_lucida", "othonna_cerarioides"],
-                spacing_m=7.0,
-                offset_m=(45.0, 110.0),
-                scale=(1.6, 2.6),
+                species=["fir_sapling_medium", "island_tree_01",
+                         "tree_small_02"],
+                spacing_m=6.0,
+                offset_m=(38.0, 120.0),
+                scale=(0.9, 1.5),
+            ),
+            TreeLayer(
+                species=["shrub_02", "grass_medium_01", "shrub_01"],
+                spacing_m=5.0,
+                offset_m=(26.0, 90.0),
+                scale=(1.0, 2.0),
             ),
         ],
         props=[
@@ -196,18 +240,28 @@ ENVIRONMENTS: Dict[str, Environment] = {
             ("concrete_road_barrier_02", 12.5, 4.2, (1.0, 1.0), "outside"),
             ("old_tyre", 10.5, 1.1, (1.0, 1.0), "tyre_wall"),
             ("modular_chainlink_fence", 17.0, 4.0, (1.0, 1.0), "both"),
+            # パドックの資材置き場らしいもの。
+            ("wooden_crate_01", 21.0, 70.0, (1.0, 1.4), "left"),
+            ("old_military_crate", 22.0, 95.0, (1.0, 1.3), "right"),
             ("Barrel_01", 20.0, 60.0, (1.0, 1.0), "both"),
-            ("plastic_crate_02", 24.0, 90.0, (1.0, 1.0), "left"),
+            ("Barrel_02", 20.5, 66.0, (1.0, 1.0), "both"),
+            ("hand_truck", 23.0, 180.0, (1.0, 1.0), "left"),
             _CONES,
         ],
+        # **ピット。** メインストレートの外側にレーンを引き、
+        # その外に建屋を並べる。指摘「すくなくともピットくらいはある」。
+        pit_building="modular_factory_facade",
     ),
 
     # -----------------------------------------------------------------
     # 都市高速（高架）。
     #
     # **桁の上と下でまったく別の世界になる。**
-    #   桁の上: 遮音壁・照明・標識だけ。木は生えない
-    #   桁の下: 街。ビル・電柱・フェンス
+    #   桁の上: 遮音壁・照明だけ。木は生えない
+    #   桁の下: 街。ビル・電柱・室外機・自販機の類
+    #
+    # **道路標識がまだ無い。** 案内標識（緑）が無いと都市高速に
+    # 見えないので、アセットが入り次第ここへ足すこと。
     # -----------------------------------------------------------------
     "high_speed_ring": Environment(
         # 街なので地形の起伏はほぼ無い。
@@ -218,22 +272,43 @@ ENVIRONMENTS: Dict[str, Environment] = {
         tree_layers=[
             # 街路樹。**桁の下**なので、地面の高さに乗る。
             TreeLayer(
-                species=["searsia_lucida", "othonna_cerarioides"],
-                spacing_m=9.0,
-                offset_m=(34.0, 95.0),
-                scale=(1.5, 2.4),
+                species=["island_tree_01", "tree_small_02", "island_tree_02"],
+                spacing_m=8.0,
+                offset_m=(26.0, 80.0),
+                scale=(0.9, 1.4),
             ),
         ],
         props=[
-            # 桁の上（路肩）。**地覆の外に立てる。**
+            # --- 桁の上（路肩）---
             ("concrete_road_barrier", 8.2, 4.2, (1.0, 1.0), "outside"),
             ("street_lamp_01", 8.6, 38.0, (1.0, 1.0), "left"),
-            # 桁の下の街。距離を取る（橋脚に当たらない位置）。
-            ("modular_urban_apartments_facade", 62.0, 74.0, (1.0, 1.0), "both"),
+
+            # --- 桁の下の街 ---
+            # **ビルを何種類も混ぜる。** 1 種類だと同じ建物が等間隔に
+            # 並ぶだけで、街に見えない。
+            ("modular_urban_apartments_facade", 58.0, 78.0, (1.0, 1.0), "both"),
+            ("modular_factory_facade", 74.0, 132.0, (1.0, 1.0), "left"),
+            ("modular_fire_escape", 46.0, 96.0, (1.0, 1.0), "right"),
+            ("rollershutter_door", 34.0, 110.0, (1.0, 1.0), "left"),
+            ("rollershutter_window_01", 36.0, 130.0, (1.0, 1.0), "right"),
+            ("large_iron_gate", 40.0, 210.0, (1.0, 1.0), "left"),
             ("modular_electricity_poles", 30.0, 55.0, (1.0, 1.0), "right"),
+            ("modular_electric_cables", 31.0, 62.0, (1.0, 1.0), "left"),
             ("modular_chainlink_fence", 24.0, 4.0, (1.0, 1.0), "both"),
-            ("rollershutter_door", 40.0, 150.0, (1.0, 1.0), "left"),
-            ("Barrel_01", 27.0, 95.0, (1.0, 1.0), "both"),
+            # 街の小物。**細かいものが在るかどうかで「街」に見えるかが決まる。**
+            ("street_lamp_02", 22.0, 44.0, (1.0, 1.0), "right"),
+            ("power_box_01", 25.0, 88.0, (1.0, 1.0), "both"),
+            ("utility_box_01", 26.0, 104.0, (1.0, 1.0), "left"),
+            ("utility_box_02", 27.0, 118.0, (1.0, 1.0), "right"),
+            ("exterior_aircon_unit", 44.0, 86.0, (1.0, 1.0), "both"),
+            ("modular_airduct_rectangular_01", 50.0, 140.0, (1.0, 1.0), "left"),
+            ("modular_pipes", 48.0, 160.0, (1.0, 1.0), "right"),
+            ("fire_hydrant", 23.0, 92.0, (1.0, 1.0), "both"),
+            ("metal_trash_can", 24.5, 74.0, (1.0, 1.0), "left"),
+            ("modular_street_seating", 25.5, 150.0, (1.0, 1.0), "right"),
+            ("covered_car", 33.0, 128.0, (1.0, 1.0), "both"),
+            ("water_manhole_cover", 21.0, 58.0, (1.0, 1.0), "both"),
+            ("plastic_container", 28.0, 112.0, (1.0, 1.0), "left"),
         ],
         guardrail=False,          # 遮音壁が兼ねる
         viaduct_piers=True,
@@ -258,38 +333,50 @@ ENVIRONMENTS: Dict[str, Environment] = {
             amplitude_m=160.0, wavelength_m=760.0, reach_m=2600.0,
             cell_m=36.0, ridges=3),
         tree_layers=[
-            # 高木（針葉樹）。**いちばん密に、いちばん大きく。**
+            # 高木（針葉樹）。**いちばん密に。実寸 9〜14 m なので拡大しない。**
             TreeLayer(
-                species=["fir_sapling", "pine_sapling_small"],
-                spacing_m=1.6,
-                offset_m=(13.0, 95.0),
-                scale=(2.6, 4.6),
+                species=_CONIFERS,
+                spacing_m=2.2,
+                offset_m=(12.0, 100.0),
+                scale=(0.85, 1.35),
             ),
             # 広葉樹。混交林にする。
             TreeLayer(
-                species=["searsia_lucida"],
-                spacing_m=2.6,
-                offset_m=(12.0, 85.0),
-                scale=(2.2, 3.6),
+                species=_BROADLEAF,
+                spacing_m=3.2,
+                offset_m=(11.0, 90.0),
+                scale=(0.9, 1.6),
             ),
-            # 下草・低木。**林床が見えるかどうかで密度の印象が変わる。**
+            # 下草・シダ。**林床が埋まっているかで密度の印象が決まる。**
             TreeLayer(
-                species=["othonna_cerarioides"],
-                spacing_m=1.9,
-                offset_m=(10.5, 60.0),
-                scale=(1.1, 2.0),
+                species=_UNDERGROWTH,
+                spacing_m=1.1,
+                offset_m=(9.5, 55.0),
+                scale=(1.0, 2.4),
             ),
-            # 立ち枯れ・切株。**同じ木ばかりにしない。**
+            # 立ち枯れ・倒木・切株。**同じ木ばかりにしない。**
             TreeLayer(
-                species=["tree_stump_01"],
-                spacing_m=11.0,
-                offset_m=(11.0, 70.0),
-                scale=(0.9, 1.7),
+                species=_DEADWOOD,
+                spacing_m=7.0,
+                offset_m=(10.5, 70.0),
+                scale=(0.9, 1.8),
             ),
         ],
         props=[
+            # 法面と岩。**山肌を作る。**
+            ("mountainside", 46.0, 58.0, (0.8, 1.8), "both"),
+            ("namaqualand_cliff_01", 30.0, 44.0, (0.9, 1.7), "both"),
+            ("namaqualand_cliff_02", 34.0, 52.0, (0.8, 1.5), "both"),
+            ("rock_face_01", 16.0, 26.0, (0.8, 1.6), "both"),
+            ("rock_face_02", 15.0, 31.0, (0.8, 1.6), "both"),
             ("boulder_01", 13.5, 17.0, (0.6, 1.6), "both"),
             ("rock_07", 12.0, 11.0, (0.5, 1.4), "both"),
+            ("rock_09", 12.5, 13.0, (0.5, 1.4), "both"),
+            ("namaqualand_boulder_03", 11.5, 9.0, (0.7, 1.5), "both"),
+            ("namaqualand_boulder_04", 11.8, 12.0, (0.7, 1.4), "both"),
+            ("rock_moss_set_01", 11.0, 8.0, (0.8, 1.5), "both"),
+            ("rock_moss_set_02", 11.2, 9.5, (0.8, 1.5), "both"),
+            ("stone_01", 10.8, 6.5, (0.8, 1.6), "both"),
             _CONES,
         ],
         guardrail=True,

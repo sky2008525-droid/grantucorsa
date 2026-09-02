@@ -405,13 +405,14 @@ def place_track(road_material, kerb_material, ground_material,
     placed = []
     # **道路構造はコースによって在ったり無かったりする。**
     # 峠に橋脚は無いし、サーキットにガードレールは無い。
-    optional = {"TrackDistant", "TrackGuardrail", "TrackViaduct"}
+    optional = {"TrackDistant", "TrackGuardrail", "TrackViaduct", "TrackPit"}
     for mesh_name, material in (("TrackRoad", road_material),
                                 ("TrackKerb", kerb_material),
                                 ("TrackGround", ground_material),
                                 ("TrackDistant", distant_material),
                                 ("TrackGuardrail", structure_material),
-                                ("TrackViaduct", structure_material)):
+                                ("TrackViaduct", structure_material),
+                                ("TrackPit", road_material)):
         mesh = find_asset("%s/%s" % (PKG_TRACK, TRACK_KEY), mesh_name,
                           unreal.StaticMesh)
         if mesh is None:

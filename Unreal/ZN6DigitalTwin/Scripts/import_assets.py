@@ -272,7 +272,8 @@ def import_track(root):
         # 無いし、サーキットにガードレールは無い。**無いことを error に
         # しない**（error にすると、正常な状態が毎回赤く出て意味を失う）。
         required = ("TrackRoad.fbx", "TrackKerb.fbx", "TrackGround.fbx")
-        optional = ("TrackDistant.fbx", "TrackGuardrail.fbx", "TrackViaduct.fbx")
+        optional = ("TrackDistant.fbx", "TrackGuardrail.fbx",
+                    "TrackViaduct.fbx", "TrackPit.fbx")
         for name in required + optional:
             path = os.path.join(folder, name)
             if not os.path.isfile(path):
