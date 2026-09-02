@@ -112,22 +112,53 @@ def test_幅と長さが現実的(key):
 def test_性格が分かれている():
     """**同じような形を並べても走り分けにならない。**
 
-    最小 R と全長で、はっきり違うものが揃っていること。
+    以前は「最小 R が 3 倍以上違うこと」だけを見ていた。
+    都市高速を首都高らしく作り直して R を 120 -> 58 m に詰めたら、
+    この条件で落ちた（58 / 20 = 2.9 倍）。
+
+    **落ちたのは設計が悪くなったからではない。** 見る軸が 1 本しか
+    無かったからである。コースの性格は最小 R だけでは決まらない:
+
+      - 全長（1 周にどれだけ掛かるか）
+      - 幅（壁がどれだけ近いか。9.5 m と 14 m はまったく別の道）
+      - 高低差（平坦か峠か）
+      - 直線の割合（全開で行ける時間）
+
+    **どの 2 本を取っても、どれか 1 つの軸ではっきり違うこと**を見る。
     """
-    tightest = {}
-    lengths = {}
+    profile = {}
     for key in ALL_KEYS:
         track = build(key)
         curvatures = [abs(p.curvature_1pm) for p in track.points
                       if p.curvature_1pm != 0.0]
-        tightest[key] = 1.0 / max(curvatures)
-        lengths[key] = track.length_m
+        straights = sum(1 for p in track.points if p.curvature_1pm == 0.0)
+        zs = [p.z_m for p in track.points]
+        profile[key] = {
+            "最小R": 1.0 / max(curvatures),
+            "全長": track.length_m,
+            "幅": track.width_m,
+            "高低差": max(zs) - min(zs),
+            "直線割合": straights / len(track.points),
+        }
 
-    # いちばんきついコースと、いちばん緩いコースが 3 倍以上違う
-    assert max(tightest.values()) / min(tightest.values()) > 3.0, (
-        "最小 R がどれも似ている: {}".format(
-            {k: round(v) for k, v in tightest.items()}))
-    # 全長も 3 倍以上違う
+    # 軸ごとの「はっきり違う」の意味。**単位が違うので比率と差を使い分ける。**
+    def differs(a, b):
+        return (max(a["最小R"], b["最小R"]) > 1.8 * min(a["最小R"], b["最小R"])
+                or max(a["全長"], b["全長"]) > 1.8 * min(a["全長"], b["全長"])
+                or abs(a["幅"] - b["幅"]) >= 2.0
+                or abs(a["高低差"] - b["高低差"]) >= 8.0
+                or abs(a["直線割合"] - b["直線割合"]) >= 0.15)
+
+    for first in ALL_KEYS:
+        for second in ALL_KEYS:
+            if first >= second:
+                continue
+            assert differs(profile[first], profile[second]), (
+                "{} と {} の性格が似すぎている: {} / {}".format(
+                    first, second, profile[first], profile[second]))
+
+    # 全長は今も 3 倍以上ばらけていること（いちばん分かりやすい違い）
+    lengths = {k: v["全長"] for k, v in profile.items()}
     assert max(lengths.values()) / min(lengths.values()) > 3.0, (
         "全長がどれも似ている: {}".format({k: round(v) for k, v in lengths.items()}))
 

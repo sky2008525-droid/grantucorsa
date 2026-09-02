@@ -237,27 +237,65 @@ def technical_circuit(spacing_m: float = 1.0) -> Track:
 
 
 def high_speed_ring(spacing_m: float = 1.0) -> Track:
-    """高速。**4〜5速中心。横Gの上限が効く。**
+    """都市高速（高架）。**首都高を参考にした架空路線。**
 
-    大きい半径の連続コーナーと長い直線。ブレーキはほとんど要らない。
+    **レイアウトは模倣しない**（`Docs/PHASE15_DATA_LICENCE.md`）。
+    真似るのは路線の形ではなく、**都市高速という道路の性格**である:
+
+    | 都市高速の性格 | ここでの表れ方 |
+    |---|---|
+    | 車線が狭く路肩が無い | 幅 **9.5 m**（2 車線ぶん）。以前は 14 m |
+    | 高い速度域なのに半径が小さい | R = **58〜85 m** のコーナーが 6 つ |
+    | 壁がすぐ横にある | 遮音壁を路面端から 1.2 m（`Blender/build_track.py`） |
+    | 直線と急カーブが交互に来る | 直線割合 71%、その間に R58 と S 字 |
+    | 高架 | 桁が地面から 11〜17 m（`Tracks/elevation.py`） |
+
+    ## 何を変えたか
+
+    以前は「大きい半径の連続コーナーと長い直線」——R=120〜150 の
+    オーバルだった。**それは高速周回路であって都市高速ではない。**
+    ブレーキがほとんど要らず、`technical_circuit` と性格が被っていた。
+
+    半径を半分以下に詰め、幅を 14 -> 9.5 m にした。**同じ速度でも
+    壁が近く、コーナーの手前で必ず減速が要る。**
+
+    ## 閉合について
+
+    円弧だけで総旋回角 360 度を作り、直線の長さは解いて決める
+    （`solve_closed_track`）。**S 字（+X 度と -X 度の対）は総旋回角を
+    変えない**ので、閉合を壊さずにコーナーの数だけ増やせる。
+    ここでは 3 対入れて、長い直線を分けている。
     """
     segments = [
-        ("free", 0.0, "main straight"),
-        ("arc", 150.0, 90.0, "T1 fast left"),
-        ("straight", 300.0, "back straight"),
-        ("arc", 130.0, 90.0, "T2 sweep left"),
-        ("straight", 220.0, "link"),
-        ("arc", 120.0, -40.0, "T3 right kink"),
-        ("arc", 120.0, 40.0, "T4 left kink"),
-        ("straight", 200.0, "run to T5"),
-        ("arc", 140.0, 90.0, "T5 left"),
-        # **free をここに置く。** 先頭の free と 90 度違う向きなので、
-        # 2 本が平行にならず閉合を解ける（平行だと det=0 になる）。
-        ("free", 0.0, "run to T6"),
-        ("arc", 140.0, 90.0, "T6 left onto main"),
-        ("straight", 40.0, "start line"),
+        # 湾岸の長い直線。**ここだけ全開で行ける**
+        ("free", 0.0, "bayside straight"),
+        # **長い直線の直後に R62。** 都市高速で最も特徴的な形
+        ("arc", 62.0, 90.0, "C1 tight left"),
+        ("straight", 150.0, "elevated straight"),
+        # S 字（合計 0 度なので閉合に効かない）
+        ("arc", 85.0, -38.0, "C2 right kink"),
+        ("straight", 35.0, "S link"),
+        ("arc", 85.0, 38.0, "C3 left kink"),
+        ("straight", 140.0, "run to C4"),
+        # いちばんきつい R58
+        ("arc", 58.0, 90.0, "C4 tight left"),
+        ("straight", 240.0, "link"),
+        ("arc", 80.0, -40.0, "C5 right kink"),
+        ("arc", 80.0, 40.0, "C6 left kink"),
+        ("straight", 120.0, "run to C7"),
+        ("arc", 110.0, 32.0, "C7 sweeper left"),
+        ("straight", 45.0, "S link 2"),
+        ("arc", 110.0, -32.0, "C8 right"),
+        ("straight", 100.0, "run to C9"),
+        ("arc", 70.0, 90.0, "C9 left"),
+        # 2 本目の自由直線。**先頭と向きが違うので閉合を解ける**
+        # （平行だと det = 0 になる）
+        ("free", 0.0, "harbour straight"),
+        ("arc", 75.0, 90.0, "C10 left onto main"),
+        ("straight", 50.0, "start line"),
     ]
-    return solve_closed_track(segments, "High Speed Ring", spacing_m, width_m=14.0)
+    return solve_closed_track(segments, "Bayside Expressway", spacing_m,
+                              width_m=9.5)
 
 
 def mountain_pass(spacing_m: float = 1.0) -> Track:

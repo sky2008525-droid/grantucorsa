@@ -154,6 +154,23 @@ class Environment:
     #: 高架の橋脚を立てるか。
     viaduct_piers: bool = False
 
+    #: 橋脚に使う外部アセット名（`<資産>/<部品名>`）。
+    #:
+    #: **`None` なら手続きで箱を立てる。** 箱は柱に見えないので、
+    #: アセットがあるならそちらを使う（ユーザーの方針:
+    #: 「できるだけ外からアセットを読み込んでから作成して」）。
+    pier_asset: "Optional[str]" = None
+
+    #: 橋脚アセットの実測の高さ [m]（glTF の bounding box）。
+    #:
+    #: **これが無いと桁に届かない。** `bridge-pillar-wide` は 0.50 で、
+    #: メートル単位ではない。桁が 15 m なら 30 倍に伸ばす必要がある。
+    #: 最初 2.0 と決め打ちして 3.5 m の切り株になった。
+    pier_asset_height_m: float = 0.5
+
+    #: 橋脚の太さの倍率。0.14 -> 約 2 m。
+    pier_asset_width_scale: float = 14.0
+
     #: 遮音壁を立てるか（高架）。
     noise_wall: bool = False
 
@@ -330,7 +347,7 @@ ENVIRONMENTS: Dict[str, Environment] = {
     # -----------------------------------------------------------------
     "high_speed_ring": Environment(
         # **午後遅く。** 太陽を低くすると、高架の桁が長い影を落とす。
-        # 都市の霞をやや強めに（湾岸は水面からの湿気で霞む）。
+        # 湾岸の霞をやや強めに。
         lighting=Lighting(sun_pitch_deg=-28.0, sun_yaw_deg=-115.0,
                           sun_intensity=8.0,
                           fog_density=0.0022, fog_height_falloff=0.03,
@@ -351,46 +368,96 @@ ENVIRONMENTS: Dict[str, Environment] = {
             # 街路樹。**桁の下**なので、地面の高さに乗る。
             TreeLayer(
                 species=["island_tree_01", "tree_small_02", "island_tree_02"],
-                spacing_m=8.0,
+                spacing_m=10.0,
                 offset_m=(26.0, 80.0),
                 scale=(0.9, 1.4),
             ),
         ],
+        # -------------------------------------------------------------
+        # **ここは全部、外から持ってきた CC0 アセットで作る。**
+        #
+        # ユーザーの指示: 「あなたが作るモデルの完成度は最低なので、
+        # できるだけ外からアセットやテクスチャは読み込んでから作成して」
+        #
+        # 橋脚も標識も照明も、以前は手続きで作った箱だった。
+        # Kenney の City Kit（CC0）に**橋脚・高速道路の案内標識・
+        # 道路照明・信号・工業ビル 20 種**が入っているので置き換える。
+        #
+        # キットは 1 資産に数十個入っているので `<資産>/<部品名>` で
+        # 指名する（`build_level.py` の `tree_meshes()`）。
+        # -------------------------------------------------------------
         props=[
-            # --- 桁の上（路肩）---
-            ("concrete_road_barrier", 8.2, 4.2, (1.0, 1.0), "outside"),
-            ("street_lamp_01", 8.6, 38.0, (1.0, 1.0), "left"),
+            # -------------------------------------------------------------
+            # **Kenney のキットはメートル単位ではない。**
+            #
+            # 実測（glTF の bounding box）した高さ:
+            #
+            #   building-a 1.47 / building-d 1.41 / building-g 1.28
+            #   building-k 0.77 / building-n 1.90 / building-r 1.39
+            #   water-tower 2.14 / chimney-large 1.70
+            #   bridge-pillar-wide 0.50 / sign-highway 0.71
+            #   light-curved 0.67 / light-square 0.60 / traffic-light 0.51
+            #
+            # 最初これを「だいたい実寸」と思って 3〜4 倍で置いた。
+            # **結果はビルが 5 m の小屋になり、街に見えなかった。**
+            # 倍率は「欲しい高さ ÷ 実測の高さ」で決める。
+            # -------------------------------------------------------------
+
+            # --- 桁の上 ---
+            ("concrete_road_barrier", 6.4, 4.2, (1.0, 1.0), "outside"),
+            # 道路照明。0.67 -> 9〜11 m
+            ("kenney_city_roads/light-curved", 6.8, 42.0, (13.0, 16.0), "left"),
+            # **高速道路の案内標識。** 0.71 -> 6.5〜8 m
+            ("kenney_city_roads/sign-highway", 7.2, 210.0, (9.0, 11.0), "right"),
+            ("kenney_city_roads/sign-highway-wide", 7.2, 340.0,
+             (9.0, 11.0), "left"),
+            # 工事規制。0.13 -> 1.0 m
+            ("kenney_city_roads/construction-barrier", 5.6, 320.0,
+             (7.0, 8.5), "right"),
 
             # --- 桁の下の街 ---
-            # **ビルを何種類も混ぜる。** 1 種類だと同じ建物が等間隔に
-            # 並ぶだけで、街に見えない。
-            ("modular_urban_apartments_facade", 58.0, 78.0, (1.0, 1.0), "both"),
-            ("modular_factory_facade", 74.0, 132.0, (1.0, 1.0), "left"),
-            ("modular_fire_escape", 46.0, 96.0, (1.0, 1.0), "right"),
-            ("rollershutter_door", 34.0, 110.0, (1.0, 1.0), "left"),
-            ("rollershutter_window_01", 36.0, 130.0, (1.0, 1.0), "right"),
-            ("large_iron_gate", 40.0, 210.0, (1.0, 1.0), "left"),
-            ("modular_electricity_poles", 30.0, 55.0, (1.0, 1.0), "right"),
-            ("modular_electric_cables", 31.0, 62.0, (1.0, 1.0), "left"),
-            ("modular_chainlink_fence", 24.0, 4.0, (1.0, 1.0), "both"),
-            # 街の小物。**細かいものが在るかどうかで「街」に見えるかが決まる。**
-            ("street_lamp_02", 22.0, 44.0, (1.0, 1.0), "right"),
-            ("power_box_01", 25.0, 88.0, (1.0, 1.0), "both"),
-            ("utility_box_01", 26.0, 104.0, (1.0, 1.0), "left"),
-            ("utility_box_02", 27.0, 118.0, (1.0, 1.0), "right"),
-            ("exterior_aircon_unit", 44.0, 86.0, (1.0, 1.0), "both"),
-            ("modular_airduct_rectangular_01", 50.0, 140.0, (1.0, 1.0), "left"),
-            ("modular_pipes", 48.0, 160.0, (1.0, 1.0), "right"),
-            ("fire_hydrant", 23.0, 92.0, (1.0, 1.0), "both"),
-            ("metal_trash_can", 24.5, 74.0, (1.0, 1.0), "left"),
-            ("modular_street_seating", 25.5, 150.0, (1.0, 1.0), "right"),
+            # **ビルは 15〜35 m。** 桁が 11〜17 m なので、それを越える
+            # 高さが要る。越えないと「高架から見下ろす街」にならない。
+            ("kenney_city_industrial/building-a", 46.0, 118.0, (11.0, 20.0), "both"),
+            ("kenney_city_industrial/building-d", 54.0, 134.0, (11.0, 21.0), "both"),
+            ("kenney_city_industrial/building-g", 62.0, 152.0, (12.0, 24.0), "left"),
+            ("kenney_city_industrial/building-k", 48.0, 126.0, (18.0, 34.0), "right"),
+            ("kenney_city_industrial/building-n", 70.0, 168.0, (8.0, 17.0), "both"),
+            ("kenney_city_industrial/building-r", 78.0, 186.0, (11.0, 22.0), "left"),
+            ("kenney_city_industrial/water-tower", 66.0, 290.0, (7.0, 11.0), "right"),
+            ("kenney_city_industrial/chimney-large", 88.0, 340.0,
+             (14.0, 22.0), "left"),
+            ("kenney_city_industrial/detail-tank-large", 56.0, 240.0,
+             (8.0, 12.0), "right"),
+            # コンテナ。0.35 -> 2.6 m
+            ("kenney_city_industrial/shipping-container-a", 30.0, 96.0,
+             (7.0, 8.0), "both"),
+            ("kenney_city_industrial/shipping-container-c", 32.0, 112.0,
+             (7.0, 8.0), "left"),
+            ("warehouse_32kda", 40.0, 260.0, (1.0, 1.0), "right"),
+            # PolyHaven のビル外壁は実寸（29 m）なので等倍。
+            # **遠くへ置く。** 近いと壁になって街が見えない。
+            ("modular_urban_apartments_facade", 92.0, 172.0, (1.0, 1.0), "both"),
+            ("modular_factory_facade", 110.0, 210.0, (1.0, 1.0), "left"),
+            # 街路のもの
+            ("kenney_city_roads/light-square", 24.0, 46.0, (11.0, 13.0), "both"),
+            ("kenney_city_roads/traffic-light", 22.0, 150.0, (10.0, 12.0), "right"),
+            ("kenney_city_roads/road-sign-street", 23.0, 130.0,
+             (5.0, 6.5), "left"),
+            ("modular_electricity_poles", 30.0, 62.0, (1.0, 1.0), "right"),
+            ("modular_chainlink_fence", 20.0, 4.0, (1.0, 1.0), "both"),
+            ("power_box_01", 25.0, 96.0, (1.0, 1.0), "both"),
             ("covered_car", 33.0, 128.0, (1.0, 1.0), "both"),
-            ("water_manhole_cover", 21.0, 58.0, (1.0, 1.0), "both"),
-            ("plastic_container", 28.0, 112.0, (1.0, 1.0), "left"),
+            ("fire_hydrant", 21.0, 104.0, (1.0, 1.0), "left"),
+            ("metal_trash_can", 22.0, 88.0, (1.0, 1.0), "right"),
         ],
         guardrail=False,          # 遮音壁が兼ねる
         viaduct_piers=True,
         noise_wall=True,
+        # **橋脚は外部アセットを使う。** 手続きで作った箱は柱に見えない。
+        pier_asset="kenney_city_roads/bridge-pillar-wide",
+        pier_asset_height_m=0.50,
+        pier_asset_width_scale=14.0,
         # **海。** 桁の高さ 11〜17 m から見下ろす位置に水面を置く。
         sea_level_m=-3.0,
     ),

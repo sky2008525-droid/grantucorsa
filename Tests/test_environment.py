@@ -69,9 +69,23 @@ def test_使うアセットが実在する(key):
 
     env = environment_for(key)
     for name in all_species(env) + all_prop_kinds(env):
-        assert name in available, (
+        # **キットの部品は `<資産>/<部品名>` で指名する。**
+        #
+        # Kenney の City Kit は 1 資産に橋脚・標識・信号が数十個入って
+        # いる。資産名だけだと 29 個のうち 1 個しか使えない。
+        asset_id, _, part = name.partition("/")
+        assert asset_id in available, (
             "{}: {} が manifest に無い（Tracks/Assets/*/manifest.json）"
-            .format(key, name))
+            .format(key, asset_id))
+
+        if part:
+            # **部品のファイルまで確かめる。** 名前を打ち間違えると、
+            # UE 側で「置けなかった」が静かに増えるだけになる。
+            matches = list(
+                (REPO_ROOT / "Tracks" / "Assets").glob(
+                    "*/{}/{}.glb".format(asset_id, part)))
+            assert matches, (
+                "{}: {} の中に {}.glb が無い".format(key, asset_id, part))
 
 
 def test_コースごとに置く物が違う():

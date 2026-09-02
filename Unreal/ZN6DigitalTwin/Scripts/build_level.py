@@ -77,6 +77,135 @@ def spawn_class(actor_class, location, rotation, label):
     return actor
 
 
+def make_instanced_component(actor, mesh, kind):
+    """Actor に `HierarchicalInstancedStaticMeshComponent` を足す。
+
+    **Python から Actor に component を足す道は 1 つしかない。**
+
+    試して駄目だったもの:
+
+      - `actor.add_component_by_class(...)`
+        -> `AttributeError: 'Actor' object has no attribute
+            'add_component_by_class'`
+      - `unreal.new_object(...)` + `actor.add_instance_component(...)`
+        -> `AttributeError: ... 'add_instance_component'`
+
+    通ったのは `SubobjectDataSubsystem`。UE5 でエディタ上の Actor に
+    component を足す正式な経路である。
+    """
+    try:
+        subsystem = unreal.get_engine_subsystem(unreal.SubobjectDataSubsystem)
+        handles = subsystem.k2_gather_subobject_data_for_instance(actor)
+        if not handles:
+            return None
+
+        params = unreal.AddNewSubobjectParams(
+            parent_handle=handles[0],
+            new_class=unreal.HierarchicalInstancedStaticMeshComponent,
+            blueprint_context=None)
+        handle, failure = subsystem.add_new_subobject(params)
+        if not failure.is_empty():
+            unreal.log_warning("[ZN6 level] %s: component を作れない: %s"
+                               % (kind, failure))
+            return None
+        subsystem.rename_subobject(handle, unreal.Text("Instances"))
+
+        data = subsystem.k2_find_subobject_data_from_handle(handle)
+        component = unreal.SubobjectDataBlueprintFunctionLibrary.get_object(data)
+        if component is None:
+            return None
+
+        component.set_static_mesh(mesh)
+        # **当たり判定を持たせない。** UE の物理は使わない（憲法ルール4）。
+        component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
+        return component
+    except Exception as error:
+        unreal.log_warning("[ZN6 level] %s: component を作れない: %s"
+                           % (kind, error))
+        return None
+
+
+def place_instanced(entries, meshes, key_field, label, missing_message):
+    """同じメッシュのものをまとめて**インスタンスで**置く。
+
+    **1 個ずつ Actor にしない。**
+
+    以前は樹木も小物も `spawn_actor_from_object` で 1 個ずつ Actor に
+    していた（峠で約 4700 個）。当時のコメントには「Nanite が効いて
+    いるので描画は持つ」と書いてあり、実際そのとおりだった。
+
+    **その前提は Nanite を切った時点で消えた**（葉が描かれないため。
+    `Scripts/prepare_foliage.py`）。Actor 1 個 = 描画呼び出し 1 回以上
+    なので、4700 個は素の状態では重い。
+
+    `HierarchicalInstancedStaticMeshComponent` は
+
+      - 同じメッシュをまとめて 1 回で描く
+      - **インスタンスごとに視錐台と距離で間引く**
+      - LOD をインスタンス単位で切り替える
+
+    ので、木の本数を減らさずに軽くできる。**配置の決定は
+    `Blender/build_track.py` にあり、ここでは間引かない。**
+    """
+    grouped = {}
+    missing = set()
+    for entry in entries:
+        kind = entry[key_field]
+        mesh = meshes.get(kind)
+        if mesh is None:
+            missing.add(kind)
+            continue
+        grouped.setdefault(kind, []).append(entry)
+
+    placed = 0
+    for kind, items in sorted(grouped.items()):
+        actor = spawn_class(unreal.Actor, unreal.Vector(0.0, 0.0, 0.0),
+                            unreal.Rotator(0.0, 0.0, 0.0),
+                            "%s_%s" % (label, kind))
+        if actor is None:
+            continue
+        component = make_instanced_component(actor, meshes[kind], kind)
+        if component is None:
+            # **黙って諦めない。** インスタンスを作れないなら、
+            # 重いと分かっていても 1 個ずつ置く（見た目は変わらない）。
+            unreal.log_warning(
+                "[ZN6 level] %s: インスタンスを作れないので Actor で置く"
+                % kind)
+            for index, entry in enumerate(items):
+                one = spawn_mesh(
+                    meshes[kind],
+                    to_ue_location(entry["x_m"], entry["y_m"], entry["z_m"]),
+                    to_ue_yaw(entry["yaw_rad"]),
+                    "%s_%s_%04d" % (label, kind, index))
+                if one is None:
+                    continue
+                scale = entry.get("scale", 1.0)
+                one.set_actor_scale3d(unreal.Vector(scale, scale, scale))
+                placed += 1
+            continue
+
+        transforms = []
+        for entry in items:
+            scale = entry.get("scale", 1.0)
+            # **縦だけ伸ばせるようにする。** 橋脚は桁の高さに合わせて
+            # 伸ばす必要があり、等倍で拡げると柱が太くなりすぎる。
+            scale_z = entry.get("scale_z", scale)
+            transforms.append(unreal.Transform(
+                to_ue_location(entry["x_m"], entry["y_m"], entry["z_m"]),
+                to_ue_yaw(entry["yaw_rad"]),
+                unreal.Vector(scale, scale, scale_z)))
+        component.add_instances(transforms, False)
+        placed += len(transforms)
+
+    if missing:
+        # **黙って減らさない。** 取り込み忘れに気づけなくなる。
+        unreal.log_error("[ZN6 level] %s: %s"
+                         % (missing_message, ", ".join(sorted(missing))))
+    log("%s %d / %d 個を %d 種のインスタンスで配置"
+        % (label, placed, len(entries), len(grouped)))
+    return placed
+
+
 def repo_root():
     # **絶対パスにする。** project_dir() は相対で返ることがあり、
     # そのままだと実行ディレクトリ依存になる。
@@ -512,6 +641,13 @@ def tree_meshes():
             species = parts[parts.index("Foliage") + 1]
         except (ValueError, IndexError):
             continue
+        # **キットの部品は名前で指名できるようにする。**
+        #
+        # Kenney の City Kit は 1 資産に橋脚・標識・信号・ビルが
+        # 数十個入っている。代表を 1 個選ぶだけだと、**29 個のうち
+        # 28 個が使えない。** `"<資産>/<メッシュ名>"` でも引けるようにする。
+        meshes["%s/%s" % (species, asset.get_name())] = asset
+
         current = meshes.get(species)
         if current is None or asset.get_name() < current.get_name():
             meshes[species] = asset
@@ -525,31 +661,8 @@ def place_trees(root):
 
     meshes = tree_meshes()
     log("樹種 %d 件: %s" % (len(meshes), ", ".join(sorted(meshes))))
-    missing = set()
-
-    count = 0
-    for tree in placement["trees"]:
-        mesh = meshes.get(tree["species"])
-        if mesh is None:
-            missing.add(tree["species"])
-            continue
-        actor = spawn_mesh(
-            mesh,
-            to_ue_location(tree["x_m"], tree["y_m"], tree["z_m"]),
-            to_ue_yaw(tree["yaw_rad"]),
-            "Tree_%s_%04d" % (tree["species"], count))
-        if actor is None:
-            continue
-        scale = tree["scale"]
-        actor.set_actor_scale3d(unreal.Vector(scale, scale, scale))
-        count += 1
-
-    if missing:
-        # **黙って減らさない。** 置けなかった種があるなら言う。
-        unreal.log_error("[ZN6 level] メッシュが見つからない樹種: %s"
-                         % ", ".join(sorted(missing)))
-    log("樹木 %d / %d 本を配置" % (count, len(placement["trees"])))
-    return count
+    return place_instanced(placement["trees"], meshes, "species", "樹木",
+                           "メッシュが見つからない樹種")
 
 
 def place_props(root):
@@ -558,10 +671,9 @@ def place_props(root):
     **樹木と同じ仕組みで置く。** どちらも `/Game/ZN6/Foliage/<kind>/` に
     取り込まれた CC0 のモデルで、配置は `placement.json` が決めている。
 
-    **数が多い**（1コースで 2000 個超）。Nanite が効いているので描画は
-    持つが、Actor が増えるとレベルの読み込みが遅くなる。
-    減らしたいときは `Blender/build_track.py` の `PROP_PLAN` の間隔を
-    広げること。**ここで間引かない**（配置の決定は1箇所に置く）。
+    **数が多い**（1コースで 2000 個超）ので、樹木と同じくインスタンスで
+    置く。減らしたいときは `Tracks/environment.py` の間隔を広げること。
+    **ここで間引かない**（配置の決定は1箇所に置く）。
     """
     with open(os.path.join(root, "Tracks", "Export", TRACK_KEY, "placement.json"),
               encoding="utf-8") as handle:
@@ -573,30 +685,8 @@ def place_props(root):
         return 0
 
     meshes = tree_meshes()          # Foliage 以下を全部拾うので props も入る
-    missing = set()
-    count = 0
-    for index, prop in enumerate(props):
-        mesh = meshes.get(prop["kind"])
-        if mesh is None:
-            missing.add(prop["kind"])
-            continue
-        actor = spawn_mesh(
-            mesh,
-            to_ue_location(prop["x_m"], prop["y_m"], prop["z_m"]),
-            to_ue_yaw(prop["yaw_rad"]),
-            "Prop_%s_%04d" % (prop["kind"], index))
-        if actor is None:
-            continue
-        scale = prop["scale"]
-        actor.set_actor_scale3d(unreal.Vector(scale, scale, scale))
-        count += 1
-
-    if missing:
-        # **黙って減らさない。** 取り込み忘れに気づけなくなる。
-        unreal.log_error("[ZN6 level] メッシュが見つからない: %s"
-                         % ", ".join(sorted(missing)))
-    log("props %d / %d 個を配置" % (count, len(props)))
-    return count
+    return place_instanced(props, meshes, "kind", "props",
+                           "メッシュが見つからない")
 
 
 def placement_textures(root):

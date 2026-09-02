@@ -1528,17 +1528,50 @@ def main():
             log("pit: %d 面（レーン %.0f m / 建屋 %d 棟）",
                 pit_faces, lane.length_m * spacing_m, len(garages))
 
-    if env.viaduct_piers or env.noise_wall:
+    # **橋脚を外部アセットで置くなら、手続きの箱は作らない。**
+    #
+    # 手続きで作った四角柱は「柱」に見えなかった。Kenney の City Kit
+    # （CC0）に橋脚があるので、そちらを桁の下へ並べる。
+    # ユーザーの方針:「できるだけ外からアセットを読み込んでから作成して」。
+    piers = []
+    use_pier_mesh = bool(env.pier_asset) and env.viaduct_piers
+    if use_pier_mesh:
+        spacing_pier = max(int(PIER_SPACING_M / spacing_m), 1)
+        ground_level = (elevation.get("ground_level_m", 0.0)
+                        if elevation else 0.0)
+        for index in range(0, len(points), spacing_pier):
+            p = points[index]
+            piers.append({
+                "kind": env.pier_asset,
+                "x_m": p["x_m"],
+                "y_m": p["y_m"],
+                "z_m": ground_level,
+                "yaw_rad": p["heading_rad"],
+                # **桁の下面まで届く高さに伸ばす。**
+                # 橋脚のアセットは実寸 2〜3 m なので、桁の高さに合わせて
+                # 縦に伸ばす。柱は角柱なので縦に伸ばしても形は破綻しない。
+                # **太さと高さを別に決める。**
+                # アセットは 0.14 x 0.50 x 0.14（メートル単位ではない）。
+                # 太さは倍率で、高さは「桁までの距離 ÷ 実測の高さ」。
+                "scale": env.pier_asset_width_scale,
+                "scale_z": max((p.get("z_m", 0.0) - ground_level)
+                               / max(env.pier_asset_height_m, 1e-6), 1.0),
+            })
+        log("pier: %d 本（%s）", len(piers), env.pier_asset)
+
+    if (env.viaduct_piers and not use_pier_mesh) or env.noise_wall:
         viaduct, viaduct_faces = build_viaduct(
             points, width_m,
             elevation.get("ground_level_m", 0.0) if elevation else 0.0,
-            piers=env.viaduct_piers, wall=env.noise_wall)
+            piers=env.viaduct_piers and not use_pier_mesh,
+            wall=env.noise_wall)
         if viaduct_faces == 0:
             log("!! 高架の橋脚・遮音壁が 1 面も出来なかった")
             return 1
         extras.append(viaduct)
         log("viaduct: %d 面（橋脚 %s / 遮音壁 %s）", viaduct_faces,
-            "あり" if env.viaduct_piers else "なし",
+            "アセット" if use_pier_mesh else
+            ("手続き" if env.viaduct_piers else "なし"),
             "あり" if env.noise_wall else "なし")
 
     ground_height_at = make_height_lookup(ground_checks["visual_field"])
@@ -1549,11 +1582,14 @@ def main():
 
     # **コース周りの物。** 自分でモデリングせず CC0 のアセットを置く。
     prop_kinds = all_prop_kinds(env)
+    if env.pier_asset:
+        prop_kinds = prop_kinds + [env.pier_asset]
     props = plan_props(points, width_m, prop_kinds, ground_height_at,
                        env.props)
     # **ピットの建屋は plan_props を通さない。** 置く場所が
     # 「中心線から何 m」ではなくピットレーンの外側と決まっているため。
     props += garages
+    props += piers
     prop_counts = {}
     for prop in props:
         prop_counts[prop["kind"]] = prop_counts.get(prop["kind"], 0) + 1

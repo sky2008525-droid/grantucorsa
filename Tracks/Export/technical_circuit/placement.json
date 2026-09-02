@@ -19,8 +19,8 @@
   "TrackDistant": "TrackDistant.fbx",
   "TrackPit": "TrackPit.fbx"
  },
- "ground_texture": "aerial_grass_rock",
- "distant_texture": "aerial_grass_rock",
+ "ground_texture": "leafy_grass",
+ "distant_texture": "sparse_grass",
  "lighting": {
   "sun_pitch_deg": -62.0,
   "sun_yaw_deg": 20.0,

@@ -19,8 +19,8 @@
   "TrackDistant": "TrackDistant.fbx",
   "TrackGuardrail": "TrackGuardrail.fbx"
  },
- "ground_texture": "aerial_grass_rock",
- "distant_texture": "aerial_grass_rock",
+ "ground_texture": "forest_ground_06",
+ "distant_texture": "cliff_side",
  "lighting": {
   "sun_pitch_deg": -42.0,
   "sun_yaw_deg": 70.0,
