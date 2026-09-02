@@ -41,17 +41,29 @@ def car():
 
 
 def test_走行域は平らである(field):
-    """**物理が平面3自由度である以上、車が行ける場所は平面でなければならない。**
+    """**このコースは縦断を持たない**（物理の基準コースなので平坦のまま）。
 
-    ここが平らでないと、車が地面から浮く／埋まる（実際にそうなった）。
+    したがって走行域の地面は一定でなければならない。一定でなければ、
+    車が地面から浮く／埋まる（実際にそうなった）。
+
+    **沈み込みの値そのものを書かない。** 以前は -0.05 m と直に書いて
+    いたが、これは `Blender/build_track.py` の `GROUND_SINK_M` を
+    別の場所に写した数字で、あちらを直すとここが落ちる（実際に落ちた）。
+    見たいのは「一定であること」と「路面より少し下にあること」で、
+    何センチかではない。
     """
-    # コース中心線が通る範囲を粗く舐める
+    heights = []
     for x in range(-100, 420, 20):
         for y in range(0, 110, 10):
-            height = field.height_at(float(x), float(y))
-            assert height == pytest.approx(-0.05, abs=1e-6), (
-                "走行域 ({}, {}) が平らでない: {:.4f} m".format(x, y, height)
-            )
+            heights.append(field.height_at(float(x), float(y)))
+
+    assert max(heights) - min(heights) < 1e-6, (
+        "走行域が平らでない: {:.4f} 〜 {:.4f} m".format(min(heights), max(heights)))
+
+    sink = heights[0]
+    assert -0.5 < sink < -0.001, (
+        "地面が路面の {:.3f} m 下にある。0 以上だと路面が埋まり、"
+        "深すぎると路肩が溝になる".format(sink))
 
 
 def test_コースから離れると起伏がある(field):

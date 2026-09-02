@@ -162,10 +162,11 @@ class Environment:
 
     #: 地面のテクスチャ（`Tracks/Assets/*/manifest.json` の名前）。
     #:
-    #: **今は 1 種類しか無い。** `aerial_grass_rock` は乾いた黄色の
-    #: 草地で、峠の林床にも街の路面にも合わない。森の地面・土・
-    #: コンクリートが手に入ったらここを差し替える。
-    #: 無いテクスチャを指した場合は既定に落ちる（UE 側で警告）。
+    #: **ここが同じだと、何を置いても同じ場所に見える。**
+    #: `aerial_grass_rock` は乾いた黄色の草地で、峠の林床にも街の
+    #: 路面にも合わない。それ 1 枚を 4 コースで使い回していた。
+    #: 無いテクスチャを指した場合は既定に落ちる（UE 側で警告する。
+    #: 黙って落とすと気づけない）。
     ground_texture: str = "aerial_grass_rock"
 
     #: 遠景のテクスチャ。近景と分けられるようにしておく。
@@ -276,6 +277,9 @@ ENVIRONMENTS: Dict[str, Environment] = {
         lighting=Lighting(sun_pitch_deg=-62.0, sun_yaw_deg=20.0,
                           fog_density=0.0006,
                           fog_colour=(0.52, 0.60, 0.72)),
+        # サーキットの緑地は刈り込まれた芝。
+        ground_texture="leafy_grass",
+        distant_texture="sparse_grass",
         relief_amplitude_m=9.0,
         relief_wavelength_m=180.0,
         distant=DistantTerrain(
@@ -332,6 +336,9 @@ ENVIRONMENTS: Dict[str, Environment] = {
                           fog_density=0.0022, fog_height_falloff=0.03,
                           fog_colour=(0.60, 0.58, 0.60),
                           sky_light_intensity=1.5),
+        # 街の地面。**草ではなくコンクリート。**
+        ground_texture="brushed_concrete_03",
+        distant_texture="dirt_floor",
         # 街なので地形の起伏はほぼ無い。
         relief_amplitude_m=2.5,
         relief_wavelength_m=260.0,
@@ -409,6 +416,12 @@ ENVIRONMENTS: Dict[str, Environment] = {
                           fog_density=0.0055, fog_height_falloff=0.012,
                           fog_colour=(0.62, 0.70, 0.80),
                           sky_light_intensity=1.9),
+        # **林床。** 落ち葉と腐葉土。乾いた草原に見えていた原因の半分は
+        # 地面のテクスチャだった（もう半分は木が若木だったこと）。
+        ground_texture="forest_ground_06",
+        # 遠景は岩肌。**近景と同じ草を貼ると、2.6 km 先の尾根に手前と
+        # 同じ大きさの草が生えて距離が分からなくなる。**
+        distant_texture="cliff_side",
         # 近景の起伏も大きくする。**道の両脇が斜面**であってほしい。
         relief_amplitude_m=26.0,
         relief_wavelength_m=110.0,
@@ -447,20 +460,22 @@ ENVIRONMENTS: Dict[str, Environment] = {
             ),
         ],
         props=[
-            # 法面と岩。**山肌を作る。**
-            ("mountainside", 46.0, 58.0, (0.8, 1.8), "both"),
-            ("namaqualand_cliff_01", 30.0, 44.0, (0.9, 1.7), "both"),
-            ("namaqualand_cliff_02", 34.0, 52.0, (0.8, 1.5), "both"),
-            ("rock_face_01", 16.0, 26.0, (0.8, 1.6), "both"),
-            ("rock_face_02", 15.0, 31.0, (0.8, 1.6), "both"),
-            ("boulder_01", 13.5, 17.0, (0.6, 1.6), "both"),
-            ("rock_07", 12.0, 11.0, (0.5, 1.4), "both"),
-            ("rock_09", 12.5, 13.0, (0.5, 1.4), "both"),
-            ("namaqualand_boulder_03", 11.5, 9.0, (0.7, 1.5), "both"),
-            ("namaqualand_boulder_04", 11.8, 12.0, (0.7, 1.4), "both"),
-            ("rock_moss_set_01", 11.0, 8.0, (0.8, 1.5), "both"),
-            ("rock_moss_set_02", 11.2, 9.5, (0.8, 1.5), "both"),
-            ("stone_01", 10.8, 6.5, (0.8, 1.6), "both"),
+            # 岩と法面。
+            #
+            # **最初は密に近くへ置きすぎて、峠ではなく岩石地帯になった**
+            # （岩 2136 個が中心線から 11〜16 m に並び、林より目立った）。
+            # 日本の峠で目に入る岩は、切土のり面と落石くらいである。
+            # 数を 1/5 に減らし、林の外へ押し出した。**主役は木。**
+            ("mountainside", 90.0, 220.0, (1.5, 3.0), "both"),
+            ("namaqualand_cliff_01", 55.0, 150.0, (1.0, 2.0), "both"),
+            ("namaqualand_cliff_02", 62.0, 170.0, (1.0, 1.8), "both"),
+            # 路肩の落石。**道の際に少しだけ。**
+            ("rock_face_01", 18.0, 70.0, (0.8, 1.5), "both"),
+            ("rock_face_02", 19.0, 85.0, (0.8, 1.5), "both"),
+            ("boulder_01", 30.0, 40.0, (0.6, 1.6), "both"),
+            ("rock_07", 20.0, 24.0, (0.5, 1.2), "both"),
+            ("rock_moss_set_01", 22.0, 26.0, (0.8, 1.4), "both"),
+            ("stone_01", 26.0, 30.0, (0.8, 1.5), "both"),
             _CONES,
         ],
         guardrail=True,

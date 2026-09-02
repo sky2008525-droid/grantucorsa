@@ -1,0 +1,12 @@
+Traffic Road Assets
+Author : milkandbanana
+License: CC0
+Source : https://opengameart.org/content/traffic-road-assets
+File   : https://opengameart.org/sites/default/files/traffic_road_assets.zip
+md5    : 509b6dfc569c7502da169b3ab1e77972
+Fetched: 2026-09-02
+
+取得と変換: Tools/fetch_opengameart.py（PACKS）
+変換の内容: zip から必要な GLB だけ取り出し、テクスチャを埋め込んで
+            書き出した。倍率 0.26738。詳細は
+            Docs/PHASE15_DATA_LICENCE.md §6.5

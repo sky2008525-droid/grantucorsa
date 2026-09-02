@@ -86,8 +86,17 @@ DRIVABLE_FLAT_MARGIN_M = 120.0
 RELIEF_BLEND_M = 200.0
 
 # 地面の高さを決めるとき、中心線を何 m ごとに標本化するか。
-# **細かくしても地面の解像度（4 m）以上には効かない。**
-GROUND_HEIGHT_SAMPLE_M = 8.0
+#
+# **8 m にしていたら路面が埋まった。**
+#
+# 最近傍の標本の標高をそのまま使うので、この値が刻み幅になる。
+# 勾配 10% の区間では 8 m 進むと 0.8 m 上がるから、最近傍の値は
+# 実際の路面から最大 0.4 m ずれる。地面の沈み込み（GROUND_SINK_M）は
+# 0.05 m しかなかったので、**1107 点中 419 点で地面が路面より高く**なり、
+# 車は路面の上ではなく草の上を走っていた。
+#
+# 中心線の点が 1 m 間隔なので、1.0 にすればずれは 0.05 m 以下になる。
+GROUND_HEIGHT_SAMPLE_M = 1.0
 
 # 地面の高さを「近くの中心線」から作るときの効く距離 [m]。
 #
@@ -118,7 +127,11 @@ VIADUCT_EDGE_DROP_M = 3.0
 # **0 にしてはいけない。** 走行面付近では地面も z=0 なので、路面メッシュと
 # 完全に同一平面になり、Z ファイティング（描画のちらつき）が出る。
 # 実際の道路も路肩より数 cm 高いので、下げること自体は不自然ではない。
-GROUND_SINK_M = 0.05
+# **0.05 では足りない。** 上の GROUND_HEIGHT_SAMPLE_M の注記のとおり、
+# 最近傍の標本と実際の路面には刻み幅ぶんのずれが残る。ずれより深く
+# 沈めておかないと、勾配のある区間で路面が埋まる。
+# 15 cm は縁石（5.5 cm）より深いが、路肩の段差として不自然ではない。
+GROUND_SINK_M = 0.15
 
 #: 路面の厚み [m]。**上面は z=0 のまま、下へ押し出す。**
 #:
@@ -764,6 +777,32 @@ def build_pit(points, lane):
     obj = bpy.data.objects.new("TrackPit", mesh)
     bpy.context.scene.collection.objects.link(obj)
     return obj, faces
+
+
+def check_road_not_buried(points, field):
+    """**路面が地面に埋まっていないか**を、作った側とは別の道で確かめる。
+
+    これまでの検査は「地面を作るのに使った値」と地面を比べていたので、
+    **常に一致して素通りした。** 自分自身と比べる検査は何も検査していない。
+
+    ここでは中心線の各点（＝路面の真の高さ）について、**出来上がった
+    高さ場を双一次補間で引いて**比べる。引き方は物理側（`Physics/terrain.py`
+    の `Heightfield.height_at`）と同じで、構築の経路とは独立している。
+
+    @return (最大の埋まり [m], その地点の s [m], 埋まっている点の数)
+    """
+    lookup = make_height_lookup(field)
+    worst = -1e30
+    worst_s = 0.0
+    buried = 0
+    for p in points:
+        gap = lookup(p["x_m"], p["y_m"]) - p.get("z_m", 0.0)
+        if gap > worst:
+            worst = gap
+            worst_s = p["s_m"]
+        if gap > 0.0:
+            buried += 1
+    return worst, worst_s, buried
 
 
 def make_height_lookup(field):
@@ -1413,12 +1452,21 @@ def main():
         log("!! 走行しうる範囲の地面が路面に追従していない (max ずれ %.6f m)",
             ground_checks["follow_error_m"])
         return 1
-    # **地面が路面より高いと、路面が地面に埋まって見えなくなる。**
-    # 実際にそうなり、車が草の上を走っていた（路面は下にあった）。
-    if ground_checks["above_road_m"] > -GROUND_SINK_M / 2.0:
-        log("!! 地面が路面より高い (最大 %.3f m)。路面が埋まる",
-            ground_checks["above_road_m"])
+    # **路面が地面に埋まっていないかを、独立した経路で確かめる。**
+    #
+    # 直前の検査は「地面を作るのに使った値」と比べているので、作り方が
+    # 間違っていても一致してしまう。ここは中心線の各点について、
+    # 出来上がった高さ場を物理側と同じ双一次補間で引いて比べる。
+    #
+    # これを入れる前は、勾配 10% の区間で **1107 点中 419 点** が
+    # 埋まっていた（最大 0.248 m）。車は草の上を走っていた。
+    buried_m, buried_s, buried_count = check_road_not_buried(points, heightfield)
+    if buried_m > -0.01:
+        log("!! 路面が地面に埋まっている: 最大 %+.3f m（s=%.0f m）/ %d 点",
+            buried_m, buried_s, buried_count)
         return 1
+    log("路面の露出 OK (地面は路面より最大 %.3f m 下、%d 点すべて)",
+        -buried_m, len(points))
     log("地面の追従 OK (%s / %d セル、max ずれ %.2e m、標高 %.1f 〜 %.1f m)",
         "高架（桁の上）" if ground_checks["is_viaduct"] else "地続き",
         ground_checks["checked_cells"], ground_checks["follow_error_m"],
