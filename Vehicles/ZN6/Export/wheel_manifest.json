@@ -1,0 +1,21 @@
+{
+  "_note": "vehicle.json の公開寸法から生成した車輪（SPEC_PHASE2_BACKLOG.md 3.2-5）。元モデルの車輪は使わない。",
+  "source_fields": [
+    "tires.size",
+    "tires.wheel",
+    "tires.unloaded_radius"
+  ],
+  "tyre_diameter_m": 0.6253,
+  "rim_diameter_m": 0.43179999999999996,
+  "tread_m": 0.215,
+  "rim_width_m": 0.17779999999999999,
+  "pcd_m": 0.1,
+  "bolt_holes": 5,
+  "spoke_count": 10,
+  "triangles": 1084,
+  "files": {
+    "left": "ZN6_wheel_left.glb",
+    "right": "ZN6_wheel_right.glb"
+  },
+  "note_sides": "left はリム面が +Y（物理座標系の左）を向く。right はその鏡像。"
+}

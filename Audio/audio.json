@@ -1,0 +1,136 @@
+{
+  "_meta": {
+    "description": "ZN6 の音響パラメータ。**すべて演出であって実測ではない。**",
+    "why_separate_file": [
+      "憲法ルール18: 現実の車両仕様とゲーム上の演出を明確に分離する。",
+      "ここにある数値はどれも出典が無い。実車の録音も行っていない",
+      "（Docs/SPEC_PHASE2_BACKLOG.md §5 の前提）。",
+      "**vehicle.json に混ぜないこと。** 混ぜると、出典のある諸元と",
+      "耳で決めた数値が同じ信頼度で扱われる。"
+    ],
+    "source_of_rpm_range": "engine.idle_rpm / engine.redline は vehicle.json から読む。ここには書かない。",
+    "fa20_note": [
+      "FA20 は水平対向4気筒。等長エキマニと不等長エキマニで音が変わるため、",
+      "素材を選ぶときは前提を記録すること（バックログ §5）。",
+      "ここでは**素材を選ばず手続き的に合成している**ので、選定の前提は無い。",
+      "代わりに『4気筒4ストロークの点火が等間隔なら基本次数は回転の2倍』という",
+      "運動学だけを使い、倍音の重みは耳で決めた assumed の値にしてある。",
+      "**この音は FA20 の音ではない。** 音色を実車に寄せたと主張しない。"
+    ],
+    "all_values_are": "assumed（出典なし・演出）"
+  },
+
+  "engine": {
+    "firing_order_per_rev": {
+      "value": 2.0,
+      "unit": "-",
+      "source": "kinematic",
+      "note": "4ストローク4気筒で点火が等間隔なら、1回転あたり2回。運動学であって音の実測ではない。"
+    },
+    "harmonics": {
+      "value": [
+        [1.0, 1.00],
+        [2.0, 0.55],
+        [3.0, 0.30],
+        [4.0, 0.22],
+        [6.0, 0.12],
+        [8.0, 0.07]
+      ],
+      "unit": "-",
+      "source": "assumed",
+      "note": "[点火次数の倍数, 振幅]。**耳で決めた。出典は無い。**"
+    },
+    "idle_gain": { "value": 0.35, "unit": "-", "source": "assumed" },
+    "redline_gain": { "value": 1.0, "unit": "-", "source": "assumed" },
+    "gain_curve_exponent": {
+      "value": 0.7,
+      "unit": "-",
+      "source": "assumed",
+      "note": "回転に対する音量の立ち上がり。1 で線形、<1 で低回転が持ち上がる。"
+    },
+    "overrun_gain": {
+      "value": 0.45,
+      "unit": "-",
+      "source": "assumed",
+      "note": "アクセルオフのときの音量比。負荷で音色が変わることの表現。"
+    },
+    "load_brightness": {
+      "value": 0.6,
+      "unit": "-",
+      "source": "assumed",
+      "note": "スロットル全開時に高次倍音をどれだけ持ち上げるか。"
+    },
+    "loop_steps": {
+      "value": 8,
+      "unit": "-",
+      "source": "assumed",
+      "note": "アイドル〜レッドラインを何段のループで持つか。等比に並べる（audio_model.engine_loop_rpms）。多いほど繋ぎ目が目立たないが、その分アセットが増える。"
+    },
+    "limiter_flutter_hz": {
+      "value": 22.0,
+      "unit": "Hz",
+      "source": "assumed",
+      "note": "レブリミッタで音を切る周期。**実車のリミッタ制御ではない。**"
+    }
+  },
+
+  "tire": {
+    "skid_slip_threshold": {
+      "value": 0.12,
+      "unit": "-",
+      "source": "assumed",
+      "note": "この利用率を超えたらスキール音を出しはじめる。物理の限界値ではない。"
+    },
+    "skid_full_slip": {
+      "value": 0.95,
+      "unit": "-",
+      "source": "assumed",
+      "note": "ここで音量が最大になる。"
+    },
+    "skid_gain": { "value": 0.8, "unit": "-", "source": "assumed" },
+    "skid_base_hz": {
+      "value": 780.0,
+      "unit": "Hz",
+      "source": "assumed",
+      "note": "スキール音の基本周波数。**測ったものではない。**"
+    },
+    "skid_speed_ref_mps": {
+      "value": 25.0,
+      "unit": "m/s",
+      "source": "assumed",
+      "note": "この速度でスキール音のピッチ係数が 1 になる。"
+    }
+  },
+
+  "road": {
+    "surfaces": {
+      "value": ["asphalt", "grass"],
+      "unit": "-",
+      "source": "assumed",
+      "note": "クロスフェードする路面の種類。Tracks 側の区分と対応させること。"
+    },
+    "crossfade_m": {
+      "value": 1.5,
+      "unit": "m",
+      "source": "assumed",
+      "note": "路面が変わる境界で混ぜる幅。0 にすると音が飛ぶ。"
+    },
+    "rolling_gain": { "value": 0.5, "unit": "-", "source": "assumed" },
+    "rolling_ref_mps": {
+      "value": 30.0,
+      "unit": "m/s",
+      "source": "assumed",
+      "note": "この速度でロードノイズの音量が最大になる。"
+    }
+  },
+
+  "mix": {
+    "master_gain": { "value": 0.9, "unit": "-", "source": "assumed" },
+    "sample_rate_hz": {
+      "value": 48000,
+      "unit": "Hz",
+      "source": "assumed",
+      "note": "生成する WAV のサンプリング周波数。UE の既定に合わせてある。"
+    }
+  }
+}

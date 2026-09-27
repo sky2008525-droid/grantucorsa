@@ -1,0 +1,12 @@
+City Kit (Industrial) 2.0
+Author : Kenney
+License: CC0
+Source : https://opengameart.org/content/city-kit-industrial
+File   : https://opengameart.org/sites/default/files/kenney_city-kit-industrial_2.0.zip
+md5    : eb88313b2bd444d63e614509fe518fba
+Fetched: 2026-09-02
+
+取得と変換: Tools/fetch_opengameart.py（PACKS）
+変換の内容: zip から必要な GLB だけ取り出し、テクスチャを埋め込んで
+            書き出した。倍率 7.3609。詳細は
+            Docs/PHASE15_DATA_LICENCE.md §6.5

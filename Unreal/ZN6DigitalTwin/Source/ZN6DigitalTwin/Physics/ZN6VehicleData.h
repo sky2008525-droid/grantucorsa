@@ -31,6 +31,15 @@ namespace ZN6
 		FString Unit;
 		FString Source;
 		double Confidence = 0.0;
+
+		/**
+		 * 探索してよい範囲。**セッティングはこれを超えない**（憲法の権限表）。
+		 * 書かれていない項目は bHasMin / bHasMax が false になる。
+		 */
+		double Minimum = 0.0;
+		double Maximum = 0.0;
+		bool bHasMin = false;
+		bool bHasMax = false;
 	};
 
 	class FVehicleData
@@ -80,6 +89,15 @@ namespace ZN6
 
 		/** これまでに読んだ全項目（confidence の伝播を検査するため）。 */
 		const TMap<FString, FParam>& GetAccessed() const { return Accessed; }
+
+		/**
+		 * 1項目のメタ情報（min/max/source）を取る。**読み込みも行う。**
+		 *
+		 * 読まずに範囲だけ見ようとすると、confidence の記録が漏れる。
+		 * 「範囲を見た＝その値に依存した」なので、記録するのが正しい。
+		 */
+		const FParam* ReadParamInfo(const FString& DottedPath, const FString& Unit,
+		                            FString& OutError);
 
 	private:
 		/** ドット区切りパスでノードを辿る。 */

@@ -487,3 +487,98 @@ def test_時間刻みを変えても結果が変わらない(data, track):
         assert lap_time is not None
         times.append(lap_time)
     assert times[0] == pytest.approx(times[1], rel=0.03)
+
+
+def test_輪別の量が時間刻みに依存しない(data):
+    """**集計量だけを見ていると数値不安定を見逃す**（issue #24）。
+
+    上のラップタイム比較は、車輪回転が毎ステップ振動していても通っていた。
+    振動は概ね対称なので**車体の合力ではほぼ打ち消し合い**、ラップタイムには
+    3% 以内でしか出なかったためである。壊れていたのは輪別の力・スリップ率・
+    荷重であって、集計量ではなかった。
+
+    そこで**輪別の量を直接比べる**。刻みも、以前は 0.002 と 0.004 という
+    **両方とも不安定な組**を比べていたので、片方に細かい刻みを入れる。
+    """
+    def run(dt_s, duration_s=2.0, speed_mps=0.0):
+        vehicle = Vehicle(data)
+        state = vehicle.initial_state(speed_mps=speed_mps, gear="1")
+        control = ControlInput(gear="1", throttle=1.0, brake=0.0,
+                               steer_rad=0.0, clutch=1.0, handbrake=0.0)
+        outputs = None
+        for _ in range(int(duration_s / dt_s)):
+            state, outputs = vehicle.step(state, control, dt_s)
+        return state, outputs
+
+    # --- 収束すること -----------------------------------------------------
+    #
+    # **「2つの刻みが一致する」ことを要求しない。** 車輪の積分は1次
+    # （前進オイラー）なので、刻みを半分にすると誤差も半分になる。
+    # 粗い刻み同士が一致することを求めるのは、1次の方法に2次の精度を
+    # 要求するのと同じで、通らないのが正しい。
+    #
+    # 代わりに**収束していること**を見る。静止発進 2 秒後の速度は
+    #
+    #     dt=0.004  2.490
+    #     dt=0.002  3.324   (+33.5%)
+    #     dt=0.001  3.914   (+17.7%)
+    #     dt=0.0005 4.250   ( +8.6%)
+    #     dt=0.00025 4.430  ( +4.2%)
+    #
+    # と、刻みを半分にするたび差が半分になる（1次収束）。
+    # **発散も振動もしていない。** これが issue #24 との違い。
+    speeds = []
+    for dt_s in (0.002, 0.001, 0.0005, 0.00025):
+        state, _ = run(dt_s)
+        speeds.append(state.vx_mps)
+
+    deltas = [abs(b - a) for a, b in zip(speeds, speeds[1:])]
+    for previous, current in zip(deltas, deltas[1:]):
+        assert current < previous, (
+            "刻みを細かくしても差が縮まらない（収束していない）: {}".format(deltas)
+        )
+    # 1次なら差は概ね半分になる。**倍以上に開いたら収束していない。**
+    for previous, current in zip(deltas, deltas[1:]):
+        assert current < previous * 0.8, "収束が1次より遅い: {}".format(deltas)
+
+    # --- 輪別の量も収束すること -------------------------------------------
+    #
+    # **集計量だけを見ていると数値不安定を見逃す。** 壊れていたのは
+    # 輪別の力・スリップ率・荷重だった。
+    _, mid = run(0.0005)
+    _, fine = run(0.00025)
+    for wheel in WHEELS:
+        assert mid.slip_ratio[wheel] == pytest.approx(
+            fine.slip_ratio[wheel], abs=0.02
+        ), "{} のスリップ率が収束していない".format(wheel)
+        assert mid.tire_fz_n[wheel] == pytest.approx(
+            fine.tire_fz_n[wheel], rel=0.05
+        ), "{} の荷重が収束していない".format(wheel)
+
+
+def test_車輪回転が振動しない(data):
+    """スリップ率が毎ステップ符号反転していないこと（issue #24）。
+
+    陽解法だったとき、静止発進 dt=0.002 では前輪スリップ率が period-2 の
+    リミットサイクルに入り、**299 回中 284 回符号が反転**していた。
+    振れ幅は 0.769。
+
+    **振れ幅ではなく符号反転を見る。** 加速中はスリップ率自体が変化する
+    ので振れ幅はゼロにならないが、振動していなければ符号は反転しない。
+    """
+    vehicle = Vehicle(data)
+    state = vehicle.initial_state(speed_mps=0.0, gear="1")
+    control = ControlInput(gear="1", throttle=1.0, brake=0.0,
+                           steer_rad=0.0, clutch=1.0, handbrake=0.0)
+
+    dt_s = 0.002
+    series = []
+    for step in range(int(1.5 / dt_s) + 300):
+        state, outputs = vehicle.step(state, control, dt_s)
+        if step >= int(1.5 / dt_s):
+            series.append(outputs.slip_ratio["FL"])
+
+    flips = sum(1 for a, b in zip(series, series[1:]) if (a > 0.0) != (b > 0.0))
+    assert flips <= 2, "前輪スリップ率が振動している（符号反転 {}/{} 回）".format(
+        flips, len(series) - 1
+    )

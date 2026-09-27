@@ -10,8 +10,10 @@
 取り込むもの:
 
   Vehicles/ZN6/Export/*.fbx      車体（ボディ + 4輪）
-  Tracks/Export/*.fbx            路面・地面
-  Tracks/Assets/polyhaven/*      樹木（glTF）・テクスチャ・HDRI
+  Tracks/Export/*.fbx            路面・縁石・地面
+  Tracks/Assets/polyhaven/*      樹木・岩・小物（glTF）・地面テクスチャ・HDRI
+  Tracks/Assets/opengameart/*    PolyHaven に無かったもの
+                                 （パイロン / 道路標識 / 信号機 / 工業ビル）
 
 **単位に注意。** Blender 側は m で書き出しており、FBX は 1 unit = 1 cm の
 UE へ入るときに 100 倍される。`import_uniform_scale` を触らないこと。
@@ -112,6 +114,33 @@ def configure_textures():
     return changed
 
 
+def configure_generated_textures():
+    """生成テクスチャの色空間を直す。
+
+    **mask と rough は線形データ。** sRGB のまま読むと、白線の縁が
+    にじみ、ラフネスが全体に明るく出る（`configure_textures()` と同じ話）。
+    """
+    fixed = 0
+    for name in ("road_overlay_mask", "road_overlay_rough", "kerb_rough"):
+        path = "%s/%s" % (PKG_TEXTURE, name)
+        asset = unreal.EditorAssetLibrary.load_asset(path)
+        if asset is None:
+            unreal.log_error("[ZN6 import] %s が無い（色空間を直せない）" % path)
+            continue
+        asset.set_editor_property("srgb", False)
+        # **TC_MASKS を使わないこと。**
+        #
+        # マテリアル側は SAMPLERTYPE_LINEAR_GRAYSCALE で読む。TC_MASKS と
+        # 組み合わせるとサンプラ型が食い違い、**マテリアルがコンパイルに
+        # 失敗して路面がチェッカー模様になる**（実際にそうなった）。
+        # 既存のラフネス（configure_textures）と同じ TC_GRAYSCALE に揃える。
+        asset.set_editor_property(
+            "compression_settings", unreal.TextureCompressionSettings.TC_GRAYSCALE)
+        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        fixed += 1
+    log("生成テクスチャの色空間: %d 枚" % fixed)
+
+
 def enable_nanite_everywhere():
     """取り込んだ StaticMesh すべてで Nanite を有効にし、**データが出来たか確かめる。**
 
@@ -189,27 +218,128 @@ def import_vehicle(root):
         # テクスチャ5枚が静かに欠けた（Blender/decompose_vehicle.py 参照）。
         tasks.append(build_task(path, "%s/%s" % (PKG_VEHICLE, name)))
 
+    # **生成した車輪を取り込む**（SPEC_PHASE2_BACKLOG.md 3.2-5）。
+    # 元モデルから切り出した車輪はリムのディテールが乏しく、UE 上で
+    # 「黒い輪」にしか見えなかった。公開寸法から生成したものへ差し替える。
+    for side in ("left", "right"):
+        path = os.path.join(export_dir, "ZN6_wheel_%s.glb" % side)
+        if not os.path.isfile(path):
+            unreal.log_error("[ZN6 import] 生成した車輪が無い: %s" % path)
+            continue
+        tasks.append(build_task(path, "%s/generated_%s" % (PKG_VEHICLE, side)))
+
     log("車体 %d パーツを取り込む" % len(tasks))
     return run_tasks(tasks)
 
 
-def import_track(root):
-    export_dir = os.path.join(root, "Tracks", "Export")
-    tasks = []
-    for name in ("TrackRoad.fbx", "TrackGround.fbx"):
-        path = os.path.join(export_dir, name)
-        if not os.path.isfile(path):
-            unreal.log_error("[ZN6 import] コースメッシュが無い: %s" % path)
-            continue
-        tasks.append(build_task(path, PKG_TRACK, static_mesh_options()))
+def track_keys(root):
+    """`Tracks/Export/` の下にあるコースの一覧。
 
-    log("コースメッシュ %d 個を取り込む" % len(tasks))
+    **フォルダの有無で決める。** 一覧をここに書くと、コースを増やすたびに
+    2 箇所を直すことになり、必ず片方を忘れる。
+    """
+    export_dir = os.path.join(root, "Tracks", "Export")
+    if not os.path.isdir(export_dir):
+        return []
+    keys = []
+    for name in sorted(os.listdir(export_dir)):
+        folder = os.path.join(export_dir, name)
+        if os.path.isfile(os.path.join(folder, "TrackRoad.fbx")):
+            keys.append(name)
+    return keys
+
+
+def import_track(root):
+    """コースごとに `/Game/ZN6/Track/<key>/` へ取り込む。
+
+    **同じ名前のメッシュが複数のコースにある**（TrackRoad / TrackGround）
+    ので、フォルダを分けないと後から取り込んだものが前を上書きする。
+    """
+    keys = track_keys(root)
+    if not keys:
+        unreal.log_error(
+            "[ZN6 import] コースメッシュが1つも無い。"
+            "先に Tools/build_tracks.sh を走らせること")
+        return []
+
+    imported = []
+    for key in keys:
+        folder = os.path.join(root, "Tracks", "Export", key)
+        tasks = []
+        # **道路構造は「あれば取り込む」。**
+        #
+        # 遠景の山・ガードレール・高架の橋脚は、コースによって在ったり
+        # 無かったりする（`Tracks/environment.py` が決める）。峠に橋脚は
+        # 無いし、サーキットにガードレールは無い。**無いことを error に
+        # しない**（error にすると、正常な状態が毎回赤く出て意味を失う）。
+        required = ("TrackRoad.fbx", "TrackKerb.fbx", "TrackGround.fbx")
+        optional = ("TrackDistant.fbx", "TrackGuardrail.fbx",
+                    "TrackViaduct.fbx", "TrackPit.fbx", "TrackSea.fbx")
+        for name in required + optional:
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                if name in required:
+                    unreal.log_error("[ZN6 import] %s が無い" % path)
+                continue
+            tasks.append(build_task(path, "%s/%s" % (PKG_TRACK, key),
+                                    static_mesh_options()))
+        log("コース %s: メッシュ %d 個" % (key, len(tasks)))
+        imported += run_tasks(tasks)
+
+    return imported
+
+
+def import_generated_textures(root):
+    """`Tracks/road_texture.py` が描いた白線・ひび割れを取り込む。
+
+    **素材を探すのではなく自分で描いている。** 白線はコース幅に合って
+    いなければ意味が無く、汎用のテクスチャでは幅 12 m のどこに引くかを
+    決められない（`Tracks/road_texture.py` の冒頭）。
+    """
+    folder = os.path.join(root, "Tracks", "Export", "Textures")
+    if not os.path.isdir(folder):
+        # **黙って飛ばさない**（憲法ルール6）。無いなら理由が分かるように。
+        unreal.log_error(
+            "[ZN6 import] 生成テクスチャが無い: %s。"
+            "先に `python Tracks/road_texture.py` を走らせること。" % folder)
+        return []
+
+    tasks = []
+    for name in ("road_overlay_diff", "road_overlay_mask", "road_overlay_rough",
+                 "kerb_diff", "kerb_rough"):
+        path = os.path.join(folder, name + ".png")
+        if os.path.isfile(path):
+            tasks.append(build_task(path, PKG_TEXTURE))
+        else:
+            unreal.log_error("[ZN6 import] %s が無い" % path)
+
+    log("生成テクスチャ %d 枚を取り込む" % len(tasks))
     return run_tasks(tasks)
 
 
-def import_polyhaven(root):
-    base = os.path.join(root, "Tracks", "Assets", "polyhaven")
-    with open(os.path.join(base, "manifest.json"), encoding="utf-8") as handle:
+def import_asset_pack(root, pack, required=True):
+    """`Tracks/Assets/<pack>/manifest.json` に載っているものを取り込む。
+
+    **PolyHaven 以外の出所も同じ形の manifest を書く**
+    （`Tools/fetch_opengameart.py`）。取り込み側を出所ごとに分けると、
+    増えるたびにここへ分岐が増える。
+
+    @param required 無いときにエラーにするか。PolyHaven は必須、
+                    それ以外は「まだ取得していない」があり得る。
+    """
+    base = os.path.join(root, "Tracks", "Assets", pack)
+    manifest_path = os.path.join(base, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        # **黙って飛ばさない**（憲法ルール6）。
+        message = ("[ZN6 import] %s が無い。"
+                   "Tools/fetch_%s.py を先に走らせること" % (manifest_path, pack))
+        if required:
+            unreal.log_error(message)
+        else:
+            unreal.log_warning(message)
+        return []
+
+    with open(manifest_path, encoding="utf-8") as handle:
         manifest = json.load(handle)
 
     model_tasks = []
@@ -219,12 +349,20 @@ def import_polyhaven(root):
         folder = os.path.join(base, asset_id)
 
         if kind == "models":
-            gltf = os.path.join(folder, record["gltf"])
-            if not os.path.isfile(gltf):
-                unreal.log_error("[ZN6 import] glTF が無い: %s" % gltf)
-                continue
-            # **glTF は Interchange 任せにする。** FbxImportUI は使えない
-            model_tasks.append(build_task(gltf, "%s/%s" % (PKG_FOLIAGE, asset_id)))
+            # **1 アセットに複数モデルがある場合がある。**
+            # OpenGameArt のキット（道路標識・信号機・工業ビル）は 1 つの
+            # zip に数十個入っていて、`Tools/fetch_opengameart.py` が
+            # `gltf_files` にその一覧を書く。1 個だけのものは従来どおり
+            # `gltf`。**両方を見る**（片方に寄せると既存が読めなくなる）。
+            names = record.get("gltf_files") or [record["gltf"]]
+            for name in names:
+                gltf = os.path.join(folder, name)
+                if not os.path.isfile(gltf):
+                    unreal.log_error("[ZN6 import] glTF が無い: %s" % gltf)
+                    continue
+                # **glTF は Interchange 任せにする。** FbxImportUI は使えない
+                model_tasks.append(
+                    build_task(gltf, "%s/%s" % (PKG_FOLIAGE, asset_id)))
 
         elif kind == "hdris":
             hdr = os.path.join(folder, record["file"])
@@ -237,8 +375,8 @@ def import_polyhaven(root):
                 if os.path.isfile(path):
                     texture_tasks.append(build_task(path, PKG_TEXTURE))
 
-    log("樹木 %d 種 / テクスチャ %d 枚を取り込む"
-        % (len(model_tasks), len(texture_tasks)))
+    log("%s: モデル %d 種 / テクスチャ %d 枚を取り込む"
+        % (pack, len(model_tasks), len(texture_tasks)))
     return run_tasks(model_tasks) + run_tasks(texture_tasks)
 
 
@@ -254,9 +392,12 @@ def main():
     imported = []
     imported += import_vehicle(root)
     imported += import_track(root)
-    imported += import_polyhaven(root)
+    imported += import_asset_pack(root, "polyhaven")
+    imported += import_asset_pack(root, "opengameart")
+    imported += import_generated_textures(root)
 
     configure_textures()
+    configure_generated_textures()
     enable_nanite_everywhere()
 
     log("取り込み完了: %d アセット" % len(imported))

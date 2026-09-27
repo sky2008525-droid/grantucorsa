@@ -1,0 +1,12 @@
+Pine Sapling Medium
+Author : Rob Tuytel (photography), Rico Cilliers (modeling)
+License: CC0
+Source : https://polyhaven.com/a/pine_sapling_medium
+File   : https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/pine_sapling_medium/pine_sapling_medium_1k.gltf
+md5    : 487847dd11bf2dd2a9cb6b9857c02d09
+Fetched: 2026-09-02
+
+取得と変換: Tools/fetch_polyhaven_trees.py
+変換の内容: 配布物に入っている 3 本のうち pine_sapling_medium_a_LOD0 だけを残して GLB 化した。
+            頂点の間引き（Decimate）と拡大縮小はしていない。
+            詳細は Docs/PHASE15_DATA_LICENCE.md §6.4

@@ -115,6 +115,15 @@ with open(sys.argv[1], encoding="utf-8-sig") as handle:
 
 succeeded = report.get("succeeded", 0)
 failed = report.get("failed", 0)
+# **警告つきの成功を「成功」に混ぜない。**
+#
+# UE は succeeded と succeededWithWarnings を別に数える。前者だけを出して
+# いたときは、一覧に 48 件並んでいるのに「成功 45 件」と出て、3 件が
+# どこへ行ったのか分からなかった。数が合わない表示は、そこに何かが
+# あることを隠す（憲法ルール6）。
+with_warnings = report.get("succeeded_with_warnings",
+                           report.get("succeededWithWarnings", 0))
+not_run = report.get("notRun", 0)
 
 for test in report.get("tests", []):
     state = test.get("state")
@@ -127,6 +136,10 @@ for test in report.get("tests", []):
                 print("       {}".format(event.get("message")))
 
 print()
-print("  成功 {} 件 / 失敗 {} 件".format(succeeded, failed))
+print("  成功 {} 件（うち警告つき {} 件） / 失敗 {} 件 / 未実行 {} 件".format(
+    succeeded + with_warnings, with_warnings, failed, not_run))
+if with_warnings:
+    print("  NOTE 警告つきの成功がある。想定内なら")
+    print("       AddExpectedMessage で登録して、本物の警告と区別すること。")
 sys.exit(1 if failed else 0)
 PY

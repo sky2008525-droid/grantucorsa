@@ -114,6 +114,8 @@ namespace ZN6
 			}
 		}
 
+		if (!Data.GetValue(TEXT("transmission.gear_ratios.R"), TEXT("-"), ReverseRatio, OutError)) { return false; }
+
 		if (!Data.GetValue(TEXT("transmission.final_drive"), TEXT("-"), FinalDrive, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("transmission.drivetrain_efficiency"), TEXT("-"), Efficiency, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("engine.rotational_inertia"), TEXT("kg*m^2"), EngineInertiaKgm2, OutError)) { return false; }
@@ -159,6 +161,16 @@ namespace ZN6
 
 	double FDrivetrain::TotalRatio(int32 GearIndex) const
 	{
+		// **ニュートラルで 0 を返さない。** 0 を返すと「比が 0 の段」として
+		// 計算が通ってしまい、間違いが黙って進む。
+		checkf(GearIndex != GearNeutral,
+		       TEXT("ニュートラルには減速比が無い。呼ぶ側で分岐すること"));
+		if (GearIndex == GearReverse)
+		{
+			// 公表値は大きさ。リバースアイドラが1枚入るぶん出力の回転方向が
+			// 前進と逆になるので、負号はここで付ける。
+			return -ReverseRatio * FinalDrive;
+		}
 		check(GearIndex >= 0 && GearIndex < ForwardGearCount);
 		return GearRatios[GearIndex] * FinalDrive;
 	}
@@ -193,7 +205,8 @@ namespace ZN6
 	// FTire
 	// =======================================================================
 
-	bool FTire::Init(FVehicleData& Data, double InNominalLoadN, FString& OutError)
+	bool FTire::Init(FVehicleData& Data, double InNominalLoadN, FString& OutError,
+	                 bool bReadCamber)
 	{
 		if (!Data.GetValue(TEXT("tires.friction_coefficient"), TEXT("-"), Mu0, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("tires.load_sensitivity"), TEXT("1/N"), LoadSensitivityPerN, OutError)) { return false; }
@@ -202,6 +215,15 @@ namespace ZN6
 		if (!Data.GetValue(TEXT("tires.longitudinal_stiffness_per_load"), TEXT("-"),
 		                   LongitudinalStiffnessPerLoad, OutError)) { return false; }
 		if (!Data.GetValue(TEXT("tires.effective_radius"), TEXT("m"), EffectiveRadiusM, OutError)) { return false; }
+
+		// **キャンバーを使うときだけ読む**（信頼度を不要に下げないため）。
+		CamberStiffnessPerLoad = -1.0;
+		if (bReadCamber
+		    && !Data.GetValue(TEXT("tires.camber_stiffness_per_load"), TEXT("1/rad"),
+		                      CamberStiffnessPerLoad, OutError))
+		{
+			return false;
+		}
 
 		NominalLoadN = InNominalLoadN;
 		return true;
@@ -223,7 +245,7 @@ namespace ZN6
 	}
 
 	void FTire::ForcesN(double FzN, double InSlipRatio, double InSlipAngleRad,
-	                    double& OutFxN, double& OutFyN) const
+	                    double& OutFxN, double& OutFyN, double CamberLeanRad) const
 	{
 		OutFxN = 0.0;
 		OutFyN = 0.0;
@@ -244,7 +266,23 @@ namespace ZN6
 		const double CAlpha = CorneringStiffnessPerLoad * FzN;
 
 		const double FxLinear = CKappa * InSlipRatio;
-		const double FyLinear = -CAlpha * std::tan(InSlipAngleRad);
+		double FyLinear = -CAlpha * std::tan(InSlipAngleRad);
+
+		// キャンバー推力。**飽和の前に足す**ので摩擦円を共有する。
+		// 後から足すと摩擦円を超える横力が出る。
+		if (CamberLeanRad != 0.0)
+		{
+			if (CamberStiffnessPerLoad < 0.0)
+			{
+				// **黙って 0 として扱わない**（憲法ルール6）。
+				UE_LOG(LogTemp, Error,
+				       TEXT("ZN6 tire: キャンバーを渡されたが係数を読んでいない"));
+			}
+			else
+			{
+				FyLinear += CamberStiffnessPerLoad * FzN * CamberLeanRad;
+			}
+		}
 
 		// **hypot を使うこと。** sqrt(x*x + y*y) では丸めが変わる（上の注記）。
 		const double FLinear = std::hypot(FxLinear, FyLinear);
@@ -263,6 +301,45 @@ namespace ZN6
 		const double Scale = FTotal / FLinear;
 		OutFxN = FxLinear * Scale;
 		OutFyN = FyLinear * Scale;
+	}
+
+	double FTire::LongitudinalSlopeNPerSlip(double FzN, double InSlipRatio,
+	                                        double InSlipAngleRad,
+	                                        double CamberLeanRad) const
+	{
+		if (FzN <= 0.0)
+		{
+			return 0.0;
+		}
+
+		const double FMax = Mu(FzN) * FzN;
+		if (FMax <= 0.0)
+		{
+			return 0.0;
+		}
+
+		const double CKappa = LongitudinalStiffnessPerLoad * FzN;
+		const double CAlpha = CorneringStiffnessPerLoad * FzN;
+
+		const double FxLinear = CKappa * InSlipRatio;
+		double FyLinear = -CAlpha * std::tan(InSlipAngleRad);
+
+		// **ForcesN と同じ動作点で微分すること。** ここでキャンバーを落とすと、
+		// 力と接線剛性が別の点の値になり、半陰的な積分の減衰が合わなくなる。
+		if (CamberLeanRad != 0.0 && CamberStiffnessPerLoad >= 0.0)
+		{
+			FyLinear += CamberStiffnessPerLoad * FzN * CamberLeanRad;
+		}
+
+		// **hypot を使うこと。** Python 側と丸めを揃える。
+		const double FLinear = std::hypot(FxLinear, FyLinear);
+
+		const double Z = FLinear / (3.0 * FMax);
+		if (Z >= 1.0)
+		{
+			return 0.0;
+		}
+		return CKappa * (1.0 - Z) * (1.0 - Z);
 	}
 
 	double FTire::SlipRatio(double WheelOmegaRads, double RadiusM, double ContactSpeedMps)

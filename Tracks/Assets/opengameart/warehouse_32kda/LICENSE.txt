@@ -1,0 +1,12 @@
+Warehouse building, low poly
+Author : 32kda
+License: CC0
+Source : https://opengameart.org/content/warehouse-building-low-poly
+File   : https://opengameart.org/sites/default/files/warehouse02.zip
+md5    : ef5045faa1971bc32e0ee2ec07b9ca13
+Fetched: 2026-09-02
+
+取得と変換: Tools/fetch_opengameart.py（PACKS）
+変換の内容: zip から必要な GLB だけ取り出し、テクスチャを埋め込んで
+            書き出した。倍率 1.0（配布物のまま）。詳細は
+            Docs/PHASE15_DATA_LICENCE.md §6.5
